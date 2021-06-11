@@ -20,7 +20,12 @@ functions:
   app:
     handler: index.handler
     events:
-      - http: ANY /
+      - http:
+          path: /
+          method: ANY
+      - http:
+          path: /{any+}
+          method: ANY
 
 resources:
   Resources:
