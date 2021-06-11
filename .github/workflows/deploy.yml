@@ -36,8 +36,8 @@ jobs:
         aws-secret-access-key :  ${{ secrets.AWS_SECRET_KEY }}
         aws-region            :  ${{ env.AWS_DEFAULT_REGION }}
 
-   - name: Install NPM dependencies
-     run : npm install
+    - name: Install NPM dependencies
+      run : npm install
 
-   - name: Deploy Lambda functions
-     run : sls deploy -s prod
+    - name: Deploy Lambda functions
+      run : sls deploy -s prod
