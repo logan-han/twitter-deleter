@@ -3,6 +3,7 @@ const serverless = require('serverless-http');
 const express = require('express')
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
+const dynamoDb = new AWS.DynamoDB.DocumentClient();
 const AWS = require('aws-sdk');
 const app = express();
 
