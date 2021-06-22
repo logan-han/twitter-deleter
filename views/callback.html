@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en" ng-app="APP">
+<head>
+    <meta charset="UTF-8">
+    <title>file upload</title>
+</head>
+
+<body>
+<h1> Hello, <%= session.twitterScreenName %> </h1>
+<h2> Please upload ZIP compressed tweet.js file from your Twitter archive file (Max 10MB): </h2>
+<form method="post" action="upload" enctype="multipart/form-data">
+    <input type="file" name="fileUploaded">
+    <input type="hidden" name="token" value="<%= session.token %>">
+    <input type="hidden" name="secret" value="<%= session.secret %>">
+    <input type="submit">
+</body>
+</html>
