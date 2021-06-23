@@ -5,10 +5,11 @@ const AWS = require('aws-sdk');
 const dynamoDb = new AWS.DynamoDB.DocumentClient();
 const oauth = require('oauth');
 const util = require('util');
-const formidable = require('formidable');
 const path = require('path');
 const fs = require('fs-extra');
-const extract = require('extract-zip');
+const multer = require('multer');
+const upload = multer({ dest: '/tmp/' });
+const AdmZip = require("adm-zip");
 const parser  = {
     cookie  : require( 'cookie-parser' ),
     body    : require( 'body-parser' ),
@@ -17,7 +18,7 @@ const parser  = {
 const app = express();
 
 app.use(parser.body.json({ strict: false }));
-//app.use(parser.body.urlencoded({ extended: false }));
+app.use(parser.body.urlencoded({ extended: false }));
 app.engine('html', require('ejs').renderFile);
 app.set('view engine', 'html');
 
@@ -75,64 +76,50 @@ app.route('/callback')
     })
 
 app.route('/upload')
-    .post(function (req, res, next) {
-        const form = new formidable.IncomingForm();
-        form.uploadDir = "/tmp/";
-        form.keepExtensions = true;
-        form.parse(req, function(error, fields, files) {
-            if (error) return res.status(500).json({ error: error });
-            if (Object.keys(files).length === 0) return res.status(400).json({ message: "no files uploaded" });
-            const filesInfo = Object.keys(files).map((key) => {
-                const file = files[key];
-                const filePath = file.path;
-                const fileExt = path.extname(file.name);
-                const fileName = path.basename(file.name, fileExt);
-                const destDir = path.join(form.uploadDir, fileName);
-
-                return { filePath, fileExt, destDir };
-            });
-            const validFiles = filesInfo.every(({ fileExt }) => fileExt === '.zip');
-            if (!validFiles) return res.status(400).json({ message: "unsupported file type" });
-
-            filesInfo.forEach(({filePath, destDir}) => {
-                // create directory with timestamp to prevent overwrite same directory names
-                extract(filePath, { dir: `${destDir}` }, (err) => {
-                    if (err) console.error('extraction failed.');
-                });
-            });
-
-            res.status(200).json({ uploaded: true });
-
-
-            fs.readdirSync("/tmp/").forEach(file => {
-                console.log(file);
+    .post(upload.single('fileUploaded'), function (req, res, next) {
+        if (req.file) {
+            console.log(req.file);
+            console.log(req.body);
+            //res.redirect('/post-upload/'+req.file.filename)
+            let zip = new AdmZip(req.file.path);
+            let zipEntries = zip.getEntries();
+            zipEntries.forEach(function (zipEntry) {
+                console.log(zipEntry.toString());
+                if (zipEntry.entryName == "tweet.js") {
+                    console.log(zipEntry.getData().toString("utf8"));
+                }
             });
 
             // force replace first line to [{
-/*
-            let tweet_archive = fs.readFileSync("/tmp/tweet.js").toString().split('\n');
-            tweet_archive[0] = "[{";
-            tweet_archive = tweet_archive.join('\n');
-            tweet_archive = JSON.parse(tweet_archive);
-            for(tweet in tweet_archive) {
-                res.write(tweet["tweet"]["id"]+"\n");
-            }
-*/
+            /*
+                        let tweet_archive = fs.readFileSync("/tmp/tweet.js").toString().split('\n');
+                        tweet_archive[0] = "[{";
+                        tweet_archive = tweet_archive.join('\n');
+                        tweet_archive = JSON.parse(tweet_archive);
+                        for(tweet in tweet_archive) {
+                            res.write(tweet["tweet"]["id"]+"\n");
+                        }
+            */
 
-/*
-            const execSync = require('child_process').execSync;
+            /*
+                        const execSync = require('child_process').execSync;
+                        execSync('cat /tmp/tweet.js | sed \'1 s/^.*$/[ {/\' | jq -r .[].tweet.id', (error, stdout, stderr) => {
+                            if (error) {
+                                console.log("Error occurs");
+                                console.error(error);
+                                return;
+                            }
+                            console.log(stdout);
+                            console.log(stderr);
+                        });
+             */
+        }
+    })
 
-            execSync('cat /tmp/tweet.js | sed \'1 s/^.*$/[ {/\' | jq -r .[].tweet.id', (error, stdout, stderr) => {
-                if (error) {
-                    console.log("Error occurs");
-                    console.error(error);
-                    return;
-                }
-                console.log(stdout);
-                console.log(stderr);
-            });
-
- */
+app.route('/post-upload/:filename')
+    .get(function (req, res, next) {
+        fs.readdirSync('/tmp/').forEach(file => {
+            console.log(file);
         });
     })
 
