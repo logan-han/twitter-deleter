@@ -21,8 +21,15 @@ provider:
         - { "Fn::GetAtt": ["AppDynamoDBTable", "Arn" ] }
 
 functions:
+  backend:
+    handler: backend.handler
+    memorySize: 256
+    timeout: 60
+    events:
+      - schedule: rate(1 minute)
   app:
     handler: index.handler
+    memorySize: 512
     events:
       - http:
           path: /
