@@ -49,7 +49,7 @@ app.route('/auth')
             } else {
                 req.session.token  = token;
                 req.session.secret = secret;
-                res.redirect("https://twitter.com/oauth/authorize?oauth_token="+req.session.token);
+                res.redirect("https://twitter.com/oauth/authenticate?oauth_token="+req.session.token);
             }
         })
     })
@@ -78,52 +78,51 @@ app.route('/callback')
 app.route('/upload')
     .post(upload.single('fileUploaded'), function (req, res, next) {
         if (req.file) {
-            console.log(req.file);
-            console.log(req.body);
-            //res.redirect('/post-upload/'+req.file.filename)
             let zip = new AdmZip(req.file.path);
             let zipEntries = zip.getEntries();
             zipEntries.forEach(function (zipEntry) {
-                console.log(zipEntry.toString());
                 if (zipEntry.entryName == "tweet.js") {
-                    console.log(zipEntry.getData().toString("utf8"));
-                }
-            });
+                    let tweet_archive = zipEntry.getData().toString("utf8").split('\n');
+                    tweet_archive[0] = "[{";
+                    tweet_archive = tweet_archive.join('\n');
+                    tweet_archive = JSON.parse(tweet_archive);
+                    let id_list = [];
+                    for(var i = 0; i < tweet_archive.length; i++) {
+                        let id = tweet_archive[i].tweet.id;
+                        id_list.push(id);
+                    }
+                    // TODO: split IDs per 20k as dynamoDB max item size is 400kb
+                    const params = {
+                        TableName: config.table_name,
+                        Item: {
+                            jobId: req.file.filename,
+                            token: req.body.token,
+                            secret: req.body.secret,
+                            tweet_no: tweet_archive.length,
+                            tweet_ids: id_list
+                        },
+                    };
 
-            // force replace first line to [{
-            /*
-                        let tweet_archive = fs.readFileSync("/tmp/tweet.js").toString().split('\n');
-                        tweet_archive[0] = "[{";
-                        tweet_archive = tweet_archive.join('\n');
-                        tweet_archive = JSON.parse(tweet_archive);
-                        for(tweet in tweet_archive) {
-                            res.write(tweet["tweet"]["id"]+"\n");
+                    dynamoDb.put(params, (error) => {
+                        if (error) {
+                            console.log(error);
+                            res.status(400).json({ error: 'Could not create the job' });
                         }
-            */
-
-            /*
-                        const execSync = require('child_process').execSync;
-                        execSync('cat /tmp/tweet.js | sed \'1 s/^.*$/[ {/\' | jq -r .[].tweet.id', (error, stdout, stderr) => {
-                            if (error) {
-                                console.log("Error occurs");
-                                console.error(error);
-                                return;
-                            }
-                            console.log(stdout);
-                            console.log(stderr);
-                        });
-             */
+                    });
+                    res.redirect('/post-upload/'+req.file.filename)
+                }
+                //TODO: error handling when tweet.js not found
+            });
         }
     })
 
-app.route('/post-upload/:filename')
+app.route('/post-upload/:jobId')
     .get(function (req, res, next) {
-        fs.readdirSync('/tmp/').forEach(file => {
-            console.log(file);
-        });
+        fs.unlinkSync('/tmp/'+req.params.jobId);
+        res.render("post-upload",{jobId : req.params.jobId});
     })
 
-app.route('/job/status/:jobId')
+app.route('/status/:jobId')
     .get(function (req, res, next) {
         const params = {
             TableName: config.table_name,
@@ -137,39 +136,11 @@ app.route('/job/status/:jobId')
                 res.status(400).json({ error: 'Could not get the job' });
             }
             if (result.Item) {
-                const {jobId, name} = result.Item;
-                res.json({ jobId});
+                res.render("status",{item : result.Item});
             } else {
                 res.status(404).json({ error: "job not found = completed" });
             }
         });
     })
-
-app.route('/job/new')
-    .get(function (req, res, next) {
-        const { jobId, filename } = req.body;
-        if (typeof jobId !== 'string') {
-            res.status(400).json({ error: '"jobId" must be a string' });
-        } else if (typeof filename !== 'string') {
-            res.status(400).json({ error: '"filename" must be a string' });
-        }
-
-        const params = {
-            TableName: config.table_name,
-            Item: {
-                jobId: jobId,
-                filename: filename,
-            },
-        };
-
-        dynamoDb.put(params, (error) => {
-            if (error) {
-                console.log(error);
-                res.status(400).json({ error: 'Could not create the job' });
-            }
-            res.json({ jobId, filename });
-        });
-    })
-
 
 module.exports.handler = serverless(app);
