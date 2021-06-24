@@ -17,7 +17,7 @@ There are some tools available that you can upload the archive data and remove y
 
 ## How does it work?
 
-It has a lambda frontend that accept tweet.js upload then extract & store tweet ID with oauth credential into an S3 bucket. 
+It has a lambda frontend that accept tweet.js upload then extract & store tweet ID with oauth credential into DynamoDB.
 
-THen the backend batch process picks it up and run batch API calls for tweet removal.
+Then the backend batch process picks it up and run batch API calls for tweet removal.
 
