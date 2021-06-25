@@ -38,9 +38,7 @@ function consumer() {
 
 app.route('/')
     .get(function (req, res, next) {
-        res.render("index", {config: config}, function (err,html) {
-            return res.send(html);
-       });
+        res.render("index");
     })
 
 app.route('/auth')
@@ -137,10 +135,12 @@ app.route('/status/:jobId')
                 console.log(error);
                 res.status(404).json({ error: 'Could not get the job' });
             }
-            if (result.Item) {
-                res.render("status",{item : result.Item});
-            } else {
-                res.status(404).json({ error: "job not found. maybe completed?" });
+            else {
+                if (typeof result.Item !== 'undefined' && result) {
+                    res.render("status",{item : result.Item});
+                } else {
+                    res.status(404).json({ error: "job not found. maybe completed?" });
+                }
             }
         });
     })
