@@ -1,3 +1,5 @@
+[![Build and Deploy](https://github.com/logan-han/twitter-deleter/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/logan-han/twitter-deleter/actions/workflows/deploy.yml)
+
 # Older Twitter Deleter
 
 Delete your old tweets using the archive file
