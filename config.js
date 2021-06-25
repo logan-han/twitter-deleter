@@ -1,4 +1,6 @@
 var config = {
+  local_port: 3000,
+  aws_region: "ap-southeast-2",
   consumer_key: "CONSUMER_KEY",
   consumer_secret: "CONSUMER_SECRET",
   callback_url: "https://twitter.han.life/callback",

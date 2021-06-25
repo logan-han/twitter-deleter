@@ -1,17 +1,23 @@
 <!DOCTYPE html>
 <html></html>
 <head>
+    <link rel="stylesheet" href="https://unpkg.com/purecss@2.0.6/build/pure-min.css" integrity="sha384-Uu6IeWbM+gzNVXJcM9XV3SohHtmWE+3VGi496jvgX1jyvDTXfdK+rfZc8C1Aehk5" crossorigin="anonymous">
     <meta charset="UTF-8">
     <title>Archive File Upload</title>
 </head>
 
 <body>
 <h1> Hello, <%= session.twitterScreenName %> </h1>
-<h2> Please upload ZIP compressed tweet.js file from your Twitter archive file (Max 10MB): </h2>
-<form method="post" action="upload" enctype="multipart/form-data">
-    <input type="file" name="fileUploaded">
-    <input type="hidden" name="token" value="<%= session.token %>">
-    <input type="hidden" name="secret" value="<%= session.secret %>">
-    <input type="submit">
+<h2>  </h2>
+<form class="pure-form" method="post" action="upload" enctype="multipart/form-data">
+    <fieldset>
+        <legend>Please upload ZIP compressed tweet.js file from your Twitter archive file:</legend>
+
+        <input type="file" name="fileUploaded">
+        <span class="pure-form-message">Max 10MB & 20,000 tweets</span>
+        <input type="hidden" name="token" value="<%= session.token %>">
+        <input type="hidden" name="secret" value="<%= session.secret %>">
+        <input class="pure-button pure-button-primary" type="submit">
+    </fieldset>
 </body>
 </html>
