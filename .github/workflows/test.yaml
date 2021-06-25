@@ -15,6 +15,14 @@ jobs:
         with:
           node-version: '12'
 
+      - name: Inject Secrets
+        env :
+          CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
+          CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
+        run : |
+          sed -i "s/CONSUMER_KEY/$CONSUMER_KEY/g" config.js
+          sed -i "s/CONSUMER_SECRET/$CONSUMER_SECRET/g" config.js
+
       - name: Build
         run: npm install
 
