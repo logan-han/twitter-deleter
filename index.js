@@ -2,9 +2,9 @@ const config = require("./config.js");
 const serverless = require('serverless-http');
 const express = require('express')
 const AWS = require('aws-sdk');
+AWS.config.update({region: config.aws_region});
 const dynamoDb = new AWS.DynamoDB.DocumentClient();
 const oauth = require('oauth');
-const util = require('util');
 const path = require('path');
 const fs = require('fs-extra');
 const multer = require('multer');
@@ -15,12 +15,14 @@ const parser  = {
     body    : require( 'body-parser' ),
     session : require( 'express-session' ),
 };
+
 const app = express();
 
 app.use(parser.body.json({ strict: false }));
 app.use(parser.body.urlencoded({ extended: false }));
 app.engine('html', require('ejs').renderFile);
 app.set('view engine', 'html');
+app.listen(config.port, () => console.log(`listening at port ${config.local_port}`));
 
 app.use(parser.session({
     secret            : config.consumer_secret,
@@ -45,7 +47,7 @@ app.route('/auth')
     .get(function(req, res, next) {
         consumer().getOAuthRequestToken(function(error, token, secret, results){
             if (error) {
-                res.send("Error: " + util.inspect(error), 500);
+                res.status(500).json({ error: 'Consumer key auth failed' });
             } else {
                 req.session.token  = token;
                 req.session.secret = secret;
@@ -58,13 +60,13 @@ app.route('/callback')
     .get(function(req, res, next) {
         consumer().getOAuthAccessToken(req.session.token, req.session.secret, req.query.oauth_verifier, function(error, token, secret, results) {
             if (error) {
-                res.send("Error: " + util.inspect(error) + "["+token+"]"+ "["+secret+"]"+ "["+util.inspect(results)+"]", 500);
+                res.status(500).json({ error: 'User token auth failed' });
             } else {
                 req.session.token = token;
                 req.session.secret = secret;
                 consumer().get("https://api.twitter.com/1.1/account/verify_credentials.json", req.session.token, req.session.secret, function (error, data, response) {
                     if (error) {
-                        res.send("Error: " + util.inspect(error), 500);
+                        res.status(500).json({ error: 'Failed to verify the auth token' });
                     } else {
                         data = JSON.parse(data);
                         req.session.twitterScreenName = data["screen_name"];
@@ -106,14 +108,14 @@ app.route('/upload')
                     dynamoDb.put(params, (error) => {
                         if (error) {
                             console.log(error);
-                            res.status(400).json({ error: 'Could not create the job' });
+                            res.status(500).json({ error: 'Could not create the job' });
                         }
                     });
                     res.redirect('/post-upload/'+req.file.filename)
                 }
-                //TODO: error handling when tweet.js not found
             });
         }
+        res.status(404).json({ error: 'Could not find tweet.js from the uploaded file' });
     })
 
 app.route('/post-upload/:jobId')
@@ -133,14 +135,15 @@ app.route('/status/:jobId')
         dynamoDb.get(params, (error, result) => {
             if (error) {
                 console.log(error);
-                res.status(400).json({ error: 'Could not get the job' });
+                res.status(404).json({ error: 'Could not get the job' });
             }
             if (result.Item) {
                 res.render("status",{item : result.Item});
             } else {
-                res.status(404).json({ error: "job not found = completed" });
+                res.status(404).json({ error: "job not found. maybe completed?" });
             }
         });
     })
 
+module.exports = app;
 module.exports.handler = serverless(app);
