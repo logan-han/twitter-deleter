@@ -5,7 +5,6 @@
 
 Delete your old tweets using the archive file
 
-
 ## Background
 
 Twitter API only returns recent 3,000 tweets and that's the maximum you can delete without any hassle.
@@ -28,4 +27,3 @@ Then the backend batch process picks it up and run batch API calls for tweet rem
 https://twitter.han.life
 
 For now, this falls under my AWS free usage hence completely free.
-

@@ -1,14 +1,13 @@
 {
   "name": "twitter-deleter",
   "version": "1.0.0",
-  "description": "",
+  "description": "Delete tweets for free",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node_modules/.bin/jest --forceExit",
+    "format": "node_modules/.bin/prettier --write '**/*.{js,css,json,md}'"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Logan Han <logan@han.life>",
   "dependencies": {
     "adm-zip": "^0.5.5",
     "aws-sdk": "^2.926.0",
@@ -26,7 +25,9 @@
   },
   "devDependencies": {
     "chai": "^4.3.4",
-    "chai-http": "^4.3.0"
+    "chai-http": "^4.3.0",
+    "jest": "^27.0.6",
+    "prettier": "^2.3.2"
   },
   "jest": {
     "coverageDirectory": "./coverage/",
