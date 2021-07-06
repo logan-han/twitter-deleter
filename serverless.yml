@@ -30,6 +30,7 @@ functions:
   app:
     handler: index.handler
     memorySize: 512
+    timeout: 60
     events:
       - http:
           path: /
