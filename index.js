@@ -5,11 +5,11 @@ const AWS = require("aws-sdk");
 AWS.config.update({ region: config.aws_region });
 const dynamoDb = new AWS.DynamoDB.DocumentClient();
 const oauth = require("oauth");
-const path = require("path");
 const fs = require("fs-extra");
 const multer = require("multer");
 const upload = multer({ dest: "/tmp/" });
 const AdmZip = require("adm-zip");
+const async = require("async");
 const parser = {
   cookie: require("cookie-parser"),
   body: require("body-parser"),
@@ -22,9 +22,7 @@ app.use(parser.body.json({ strict: false }));
 app.use(parser.body.urlencoded({ extended: false }));
 app.engine("html", require("ejs").renderFile);
 app.set("view engine", "html");
-app.listen(config.port, () =>
-  console.log(`listening at port ${config.local_port}`)
-);
+app.listen(config.port);
 
 app.use(
   parser.session({
@@ -88,6 +86,8 @@ app.route("/callback").get(function (req, res, next) {
             } else {
               data = JSON.parse(data);
               req.session.twitterScreenName = data["screen_name"];
+              req.session.twitterUserId = data["id"];
+              req.session.lastTweetId = data["status"]["id"];
               res.render("callback", { session: req.session });
             }
           }
@@ -132,6 +132,7 @@ app
               res.status(500).json({ error: "Could not create the job" });
             }
           });
+          fs.unlinkSync(req.file.path);
           res.redirect("/post-upload/" + req.file.filename);
         }
       });
@@ -141,8 +142,66 @@ app
       .json({ error: "Could not find tweet.js from the uploaded file" });
   });
 
+app.route("/delete-recent").post(function (req, res, next) {
+  let max_id = req.body.last_tweet_id;
+  let id_list = [];
+  let count = 0;
+  let loop = true;
+
+  async.whilst(
+    function () {
+      return loop;
+    },
+    function (next) {
+      consumer().get(
+        "https://api.twitter.com/1.1/statuses/user_timeline.json?exclude_replies=false&include_rts=true&count=200&user_id=" +
+          req.body.user_id +
+          "&max_id=" +
+          max_id,
+        req.body.token,
+        req.body.secret,
+        function (error, data, response) {
+          if (error) {
+            console.log(error);
+          } else {
+            data = JSON.parse(data);
+            console.log(data);
+            count += data.length;
+            max_id = data.slice(-1)[0].id;
+            for (tweet_id in data) {
+              let id = data[tweet_id].id;
+              id_list.push(id);
+            }
+            if (data.length !== 200) {
+              loop = false;
+            }
+          }
+        });
+      setTimeout(next, 500);
+    },
+    function () {
+      let jobId = Math.random().toString(36).substring(7);
+      const params = {
+        TableName: config.table_name,
+        Item: {
+          jobId: jobId,
+          token: req.body.token,
+          secret: req.body.secret,
+          tweet_no: count,
+          tweet_ids: id_list,
+        },
+      };
+      dynamoDb.put(params, (error) => {
+        if (error) {
+          console.log(error);
+          res.status(500).json({ error: "Could not create the job" });
+        }
+      });
+      res.render("post-upload", { jobId: jobId });
+    });
+});
+
 app.route("/post-upload/:jobId").get(function (req, res, next) {
-  fs.unlinkSync("/tmp/" + req.params.jobId);
   res.render("post-upload", { jobId: req.params.jobId });
 });
 
