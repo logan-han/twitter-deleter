@@ -40,16 +40,23 @@ describe("Route Checks", () => {
       });
     });
   });
-  describe("GET /delete-recent", () => {
+  describe("POST /delete-recent", () => {
     it("should return 500", (done) => {
-      request.get("/delete-recent").end((err, res) => {
-        if (err) done(err);
-        res.status.should.equal(500);
-        done();
-      });
+      request
+          .post("/delete-recent")
+          .type("form")
+          .send({
+            _method: "post",
+          })
+          .end((err, res) => {
+            if (err) done(err);
+            res.status.should.equal(500);
+            done();
+          });
     });
   });
-  describe("POST /upload without a file", () => {
+
+  describe("POST /upload", () => {
     it("should return 404", (done) => {
       request
         .post("/upload")

@@ -142,70 +142,58 @@ app
   });
 
 app.route("/delete-recent").post(function (req, res, next) {
-  consumer().get(
-    "https://api.twitter.com/1.1/account/verify_credentials.json",
-    req.body.token,
-    req.body.secret,
-    function (error, data, response) {
-      if (error) {
-        res.status(500).json({ error: "Failed to verify the auth token" });
-      } else {
-        // max loop 3200 / 200 = 16
         let max_id = 0;
         let id_list = [];
         let count = 0;
-        for (var i = 0; i < 16; i++) {
+        let loop = true;
+        async.whilst(function () {
+          return loop;
+        }, function(next) {
           consumer().get(
-            "https://api.twitter.com/1.1/statuses/user_timeline.json?exclude_replies=false&include_rts=true&count=200&max_id=" +
+              "https://api.twitter.com/1.1/statuses/user_timeline.json?exclude_replies=false&include_rts=true&count=200&max_id=" +
               max_id,
-            req.body.token,
-            req.body.secret,
-            function (error, data, response) {
-              if (error) {
-                res
-                  .status(500)
-                  .json({ error: "Failed to fetch user timeline API" });
-                return;
-              } else {
-                data = JSON.parse(data);
-                count += data.length;
-                for (tweet_id in data) {
-                  let id = data[tweet_id].tweet.id;
-                  id_list.push(id);
-                }
-                if (data.length < 200 || i === 15) {
-                  let jobId = Math.random().toString(36).substring(7);
-                  const params = {
-                    TableName: config.table_name,
-                    Item: {
-                      jobId: jobId,
-                      token: req.body.token,
-                      secret: req.body.secret,
-                      tweet_no: count,
-                      tweet_ids: id_list,
-                    },
-                  };
-                  dynamoDb.put(params, (error) => {
-                    if (error) {
-                      console.log(error);
-                      res
-                        .status(500)
-                        .json({ error: "Could not create the job" });
-                      return;
-                    }
-                  });
-                  res.render("post-upload", { jobId: jobId });
-                  return;
+              req.body.token,
+              req.body.secret,
+              function (error, data, response) {
+                if (error) {
+                  res
+                      .status(500)
+                      .json({error: "Failed to fetch user timeline API"});
                 } else {
+                  data = JSON.parse(data);
+                  count += data.length;
                   max_id = data.slice(-1)[0].tweet.id;
+                  for (tweet_id in data) {
+                    let id = data[tweet_id].tweet.id;
+                    id_list.push(id);
+                  }
+                  if (data.length !== 200) {
+                    loop = false;
+                    let jobId = Math.random().toString(36).substring(7);
+                    const params = {
+                      TableName: config.table_name,
+                      Item: {
+                        jobId: jobId,
+                        token: req.body.token,
+                        secret: req.body.secret,
+                        tweet_no: count,
+                        tweet_ids: id_list,
+                      },
+                    };
+                    dynamoDb.put(params, (error) => {
+                      if (error) {
+                        console.log(error);
+                        res
+                            .status(500)
+                            .json({error: "Could not create the job"});
+                      }
+                    });
+                    res.render("post-upload", {jobId: jobId});
+                  }
                 }
               }
-            }
           );
-        }
-      }
-    }
-  );
+        });
 });
 
 app.route("/post-upload/:jobId").get(function (req, res, next) {
