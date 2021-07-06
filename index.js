@@ -141,7 +141,7 @@ app
       .json({ error: "Could not find tweet.js from the uploaded file" });
   });
 
-app.route("/delete-recent").get(function (req, res, next) {
+app.route("/delete-recent").post(function (req, res, next) {
   consumer().get(
     "https://api.twitter.com/1.1/account/verify_credentials.json",
     req.body.token,
