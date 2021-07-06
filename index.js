@@ -5,7 +5,6 @@ const AWS = require("aws-sdk");
 AWS.config.update({ region: config.aws_region });
 const dynamoDb = new AWS.DynamoDB.DocumentClient();
 const oauth = require("oauth");
-const path = require("path");
 const fs = require("fs-extra");
 const multer = require("multer");
 const upload = multer({ dest: "/tmp/" });
@@ -132,6 +131,7 @@ app
               res.status(500).json({ error: "Could not create the job" });
             }
           });
+          fs.unlinkSync(req.file.path);
           res.redirect("/post-upload/" + req.file.filename);
         }
       });
@@ -141,8 +141,74 @@ app
       .json({ error: "Could not find tweet.js from the uploaded file" });
   });
 
+app.route("/delete-recent").get(function (req, res, next) {
+  consumer().get(
+    "https://api.twitter.com/1.1/account/verify_credentials.json",
+    req.body.token,
+    req.body.secret,
+    function (error, data, response) {
+      if (error) {
+        res.status(500).json({ error: "Failed to verify the auth token" });
+      } else {
+        // max loop 3200 / 200 = 16
+        let max_id = 0;
+        let id_list = [];
+        let count = 0;
+        for (var i = 0; i < 16; i++) {
+          consumer().get(
+            "https://api.twitter.com/1.1/statuses/user_timeline.json?exclude_replies=false&include_rts=true&count=200&max_id=" +
+              max_id,
+            req.body.token,
+            req.body.secret,
+            function (error, data, response) {
+              if (error) {
+                res
+                  .status(500)
+                  .json({ error: "Failed to fetch user timeline API" });
+                return;
+              } else {
+                data = JSON.parse(data);
+                count += data.length;
+                for (tweet_id in data) {
+                  let id = data[tweet_id].tweet.id;
+                  id_list.push(id);
+                }
+                if (data.length < 200 || i === 15) {
+                  let jobId = Math.random().toString(36).substring(7);
+                  const params = {
+                    TableName: config.table_name,
+                    Item: {
+                      jobId: jobId,
+                      token: req.body.token,
+                      secret: req.body.secret,
+                      tweet_no: count,
+                      tweet_ids: id_list,
+                    },
+                  };
+                  dynamoDb.put(params, (error) => {
+                    if (error) {
+                      console.log(error);
+                      res
+                        .status(500)
+                        .json({ error: "Could not create the job" });
+                      return;
+                    }
+                  });
+                  res.render("post-upload", { jobId: jobId });
+                  return;
+                } else {
+                  max_id = data.slice(-1)[0].tweet.id;
+                }
+              }
+            }
+          );
+        }
+      }
+    }
+  );
+});
+
 app.route("/post-upload/:jobId").get(function (req, res, next) {
-  fs.unlinkSync("/tmp/" + req.params.jobId);
   res.render("post-upload", { jobId: req.params.jobId });
 });
 

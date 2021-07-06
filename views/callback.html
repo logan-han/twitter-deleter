@@ -1,23 +1,34 @@
 <!DOCTYPE html>
 <html></html>
 <head>
-    <link rel="stylesheet" href="https://unpkg.com/purecss@2.0.6/build/pure-min.css" integrity="sha384-Uu6IeWbM+gzNVXJcM9XV3SohHtmWE+3VGi496jvgX1jyvDTXfdK+rfZc8C1Aehk5" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css" integrity="sha384-HSMxcRTRxnN+Bdg0JdbxYKrThecOKuH5zCYotlSAcp1+c8xmyTe9GYg1l9a69psu" crossorigin="anonymous">
     <meta charset="UTF-8">
     <title>Archive File Upload</title>
 </head>
 
 <body>
 <h1> Hello, <%= session.twitterScreenName %> </h1>
-<h2>  </h2>
-<form class="pure-form" method="post" action="upload" enctype="multipart/form-data">
-    <fieldset>
-        <legend>Please upload ZIP compressed tweet.js file from your Twitter archive file:</legend>
-
+<H3>To delete your older than 3,200 recent tweets, please follow below steps:</H3>
+<ol>
+    <li><a href="https://twitter.com/settings/download_your_data">Get your Twitter archive zip</a></li>
+    <li>Unzip and find data\tweet.js then zip the file</li>
+    <li>upload ZIP compressed tweet.js file from your Twitter archive file below</li>
+</ol>
+<form class="form-inline" method="post" action="upload" enctype="multipart/form-data">
+    <div class="form-group">
         <input type="file" name="fileUploaded">
-        <span class="pure-form-message">Max 10MB & 20,000 tweets</span>
+        <span class="help-block">Max 10MB & 20,000 tweets</span>
         <input type="hidden" name="token" value="<%= session.token %>">
         <input type="hidden" name="secret" value="<%= session.secret %>">
-        <input class="pure-button pure-button-primary" type="submit">
-    </fieldset>
+    </div>
+    <button type="submit" class="btn btn-default">Upload</button>
+</form>
+<h3>Or, just delete your recent 3,200 tweets:</h3>
+<form class="form-inline" method="post" action="delete-recent">
+    <input type="hidden" name="token" value="<%= session.token %>">
+    <input type="hidden" name="secret" value="<%= session.secret %>">
+    <button type="submit" class="btn btn-primary">Delete Recent Tweets Only</button>
+</form>
+
 </body>
 </html>
