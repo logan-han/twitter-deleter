@@ -86,8 +86,8 @@ app.route("/callback").get(function (req, res, next) {
             } else {
               data = JSON.parse(data);
               req.session.twitterScreenName = data["screen_name"];
-              req.session.twitterUserId = data["id"];
-              req.session.lastTweetId = data["status"]["id"];
+              req.session.twitterUserId = data["id_str"];
+              req.session.lastTweetId = data["status"]["id_str"];
               res.render("callback", { session: req.session });
             }
           }
@@ -111,7 +111,7 @@ app
           tweet_archive = JSON.parse(tweet_archive);
           let id_list = [];
           for (var i = 0; i < tweet_archive.length; i++) {
-            let id = tweet_archive[i].tweet.id;
+            let id = tweet_archive[i].tweet.id_str;
             id_list.push(id);
           }
           // TODO: split IDs per 20k as dynamoDB max item size is 400kb
@@ -132,8 +132,8 @@ app
               res.status(500).json({ error: "Could not create the job" });
             }
           });
-          fs.unlinkSync(req.file.path);
           res.redirect("/post-upload/" + req.file.filename);
+          fs.unlinkSync(req.file.path);
         }
       });
     }
@@ -165,11 +165,10 @@ app.route("/delete-recent").post(function (req, res, next) {
             console.log(error);
           } else {
             data = JSON.parse(data);
-            console.log(data);
             count += data.length;
-            max_id = data.slice(-1)[0].id;
+            max_id = data.slice(-1)[0].id_str;
             for (tweet_id in data) {
-              let id = data[tweet_id].id;
+              let id = data[tweet_id].id_str;
               id_list.push(id);
             }
             if (data.length !== 200) {
