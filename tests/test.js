@@ -40,6 +40,22 @@ describe("Route Checks", () => {
       });
     });
   });
+  // causes Error [ERR_HTTP_HEADERS_SENT]: Cannot set headers after they are sent to the client
+  describe("POST /delete-recent", () => {
+    it("should return 500", (done) => {
+      request
+        .post("/delete-recent")
+        .type("form")
+        .send({
+          _method: "post",
+        })
+        .end((err, res) => {
+          if (err) done(err);
+          res.status.should.equal(500);
+          done();
+        });
+    });
+  });
 
   describe("POST /upload", () => {
     it("should return 404", (done) => {
