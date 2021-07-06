@@ -9,6 +9,7 @@ const fs = require("fs-extra");
 const multer = require("multer");
 const upload = multer({ dest: "/tmp/" });
 const AdmZip = require("adm-zip");
+const async = require('async');
 const parser = {
   cookie: require("cookie-parser"),
   body: require("body-parser"),
