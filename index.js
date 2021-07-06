@@ -87,6 +87,10 @@ app.route("/callback").get(function (req, res, next) {
               data = JSON.parse(data);
               req.session.twitterScreenName = data["screen_name"];
               req.session.twitterUserId = data["id_str"];
+              //this become undefined when there's no tweet
+              if (typeof data["status"]["id_str"] === "undefined") {
+                res.status(404).json({ error: "Can't find any tweets" });
+              }
               req.session.lastTweetId = data["status"]["id_str"];
               res.render("callback", { session: req.session });
             }
@@ -128,7 +132,6 @@ app
 
           dynamoDb.put(params, (error) => {
             if (error) {
-              console.log(error);
               res.status(500).json({ error: "Could not create the job" });
             }
           });
@@ -162,7 +165,9 @@ app.route("/delete-recent").post(function (req, res, next) {
         req.body.secret,
         function (error, data, response) {
           if (error) {
-            console.log(error);
+            return res
+              .status(500)
+              .json({ error: "Could not get the timeline" });
           } else {
             data = JSON.parse(data);
             count += data.length;
@@ -175,7 +180,8 @@ app.route("/delete-recent").post(function (req, res, next) {
               loop = false;
             }
           }
-        });
+        }
+      );
       setTimeout(next, 500);
     },
     function () {
@@ -192,12 +198,12 @@ app.route("/delete-recent").post(function (req, res, next) {
       };
       dynamoDb.put(params, (error) => {
         if (error) {
-          console.log(error);
           res.status(500).json({ error: "Could not create the job" });
         }
       });
       res.render("post-upload", { jobId: jobId });
-    });
+    }
+  );
 });
 
 app.route("/post-upload/:jobId").get(function (req, res, next) {
@@ -213,7 +219,6 @@ app.route("/status/:jobId").get(function (req, res, next) {
   };
   dynamoDb.get(params, (error, result) => {
     if (error) {
-      console.log(error);
       res.status(404).json({ error: "Could not get the job" });
     } else {
       if (typeof result.Item !== "undefined" && result) {
