@@ -57,7 +57,7 @@ describe("Route Checks", () => {
     });
   });
 
-  describe("POST /upload", () => {
+  describe("POST /upload without a file", () => {
     it("should return 404", (done) => {
       request
         .post("/upload")
@@ -72,6 +72,7 @@ describe("Route Checks", () => {
         });
     });
   });
+
 });
 
 /*
