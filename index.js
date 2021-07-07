@@ -136,7 +136,7 @@ app
             }
           });
           res.redirect("/post-upload/" + req.file.filename);
-          fs.unlinkSync(req.file.path);
+          if(fs.exists(req.file.path)) fs.unlinkSync(req.file.path);
         }
       });
     }
