@@ -1,7 +1,7 @@
 name: Test
 env:
   AWS_DEFAULT_REGION: "ap-southeast-2"
-on: [push, pull_request]
+on: [push]
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,7 +27,7 @@ jobs:
         run: npm install
 
       - name: Test
-        run : npm install -g jest && jest --forceExit
+        run : npm install -g jest && jest --forceExit --testTimeout=30000
         
       - name: Codecov
         uses: codecov/codecov-action@v1
