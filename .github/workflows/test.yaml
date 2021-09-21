@@ -27,7 +27,7 @@ jobs:
         run: npm install
 
       - name: Test
-        run : npm install -g jest && jest --forceExit --testTimeout=10000
+        run : npm install -g jest && jest --forceExit --testTimeout=30000
         
       - name: Codecov
         uses: codecov/codecov-action@v1
