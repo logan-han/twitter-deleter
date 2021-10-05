@@ -17,6 +17,8 @@ You can still interact with older tweets if you know the unique tweet ID however
 
 ## How does it work?
 
+![Workflow](/workflow.png)
+
 It has a lambda frontend that accept ZIP compressed tweet.js upload then extract & store tweet IDs with the oauth credential into DynamoDB.
 
 Then the backend batch process picks it up and run batch API calls for tweet removal.
