@@ -24,7 +24,7 @@
     "serverless-http": "^2.7.0"
   },
   "devDependencies": {
-    "jest": "^27.4.0",
+    "jest": "^27.4.7",
     "prettier": "^2.5.0",
     "should": "^13.2.3",
     "supertest": "^6.1.6"
