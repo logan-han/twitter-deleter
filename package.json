@@ -18,14 +18,14 @@
     "ejs": "^3.1.6",
     "express": "^4.17.1",
     "express-session": "^1.17.2",
-    "fs-extra": "^10.0.0",
+    "fs-extra": "^10.0.1",
     "multer": "^1.4.3",
     "oauth": "^0.9.15",
     "serverless-http": "^2.7.0"
   },
   "devDependencies": {
     "jest": "^27.5.0",
-    "prettier": "^2.5.0",
+    "prettier": "^2.6.0",
     "should": "^13.2.3",
     "supertest": "^6.1.6"
   },
