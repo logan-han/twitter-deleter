@@ -20,7 +20,7 @@
     "express-session": "^1.17.2",
     "fs-extra": "^10.1.0",
     "multer": "^1.4.3",
-    "oauth": "^0.9.15",
+    "oauth": "^0.10.0",
     "serverless-http": "^2.7.0"
   },
   "devDependencies": {
