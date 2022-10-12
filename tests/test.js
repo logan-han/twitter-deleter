@@ -22,15 +22,6 @@ describe("Route Checks", () => {
       });
     });
   });
-  describe("GET /status/test", () => {
-    it("should return 404", (done) => {
-      request.get("/status/test").end((err, res) => {
-        if (err) done(err);
-        res.status.should.equal(404);
-        done();
-      });
-    });
-  });
   describe("GET /callback", () => {
     it("should return 500", (done) => {
       request.get("/callback").end((err, res) => {
