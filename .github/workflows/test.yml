@@ -31,7 +31,7 @@ jobs:
         with:
            timeout_seconds: 60
            max_attempts: 3
-           command: npm install -g jest && jest --forceExit
+           command: node_modules/.bin/jest --forceExit
         
       - name: Codecov
         uses: codecov/codecov-action@v1
