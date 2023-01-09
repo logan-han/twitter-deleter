@@ -23,7 +23,7 @@
     "multer": "^1.4.3",
     "oauth": "^0.10.0",
     "qs": "^6.11.0",
-    "serverless-http": "^3.1.0"
+    "serverless-http": "^3.1.1"
   },
   "devDependencies": {
     "jest": "^28.1.3",
