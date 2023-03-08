@@ -12,7 +12,7 @@
     "adm-zip": "^0.5.10",
     "async": "^0.9.2",
     "aws-sdk": "^2.1331.0",
-    "body-parser": "^1.20.1",
+    "body-parser": "^1.20.2",
     "child_process": "^1.0.2",
     "cookie-parser": "^1.4.6",
     "ejs": "^3.1.8",
