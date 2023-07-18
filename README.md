@@ -1,6 +1,11 @@
 [![Build and Deploy](https://github.com/logan-han/twitter-deleter/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/logan-han/twitter-deleter/actions/workflows/deploy.yml)
 [![codecov](https://codecov.io/gh/logan-han/twitter-deleter/branch/main/graph/badge.svg?token=LhKvIYdu4P)](https://codecov.io/gh/logan-han/twitter-deleter)
 
+# Deprecated
+Due to the new Twitter API limit = 50 DELETE per 24 hours. 😅
+
+I'll clean this up later on.
+
 # Older Twitter Deleter
 
 Delete your old tweets using the Twitter archive file
