@@ -25,7 +25,6 @@ jobs:
       env :
         CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
         CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
-        SERVERLESS_ACCESS_KEY: ${{ secrets.SERVERLESS_ACCESS_KEY }}
       run : |
         sed -i "s/CONSUMER_KEY/$CONSUMER_KEY/g" config.js
         sed -i "s/CONSUMER_SECRET/$CONSUMER_SECRET/g" config.js
@@ -41,4 +40,6 @@ jobs:
       run : npm install
 
     - name: Deploy Lambda functions
+      env :
+        SERVERLESS_ACCESS_KEY: ${{ secrets.SERVERLESS_ACCESS_KEY }}
       run : sls deploy
