@@ -1,9 +1,7 @@
 const config = require("./config.js");
 const serverless = require("serverless-http");
 const express = require("express");
-const AWS = require("aws-sdk");
-AWS.config.update({ region: config.aws_region });
-const dynamoDb = new AWS.DynamoDB.DocumentClient();
+const { DynamoDBClient, PutCommand, GetCommand } = require("@aws-sdk/client-dynamodb");
 const oauth = require("oauth");
 const fs = require("fs-extra");
 const multer = require("multer");
@@ -17,6 +15,7 @@ const parser = {
 };
 
 const app = express();
+const dynamoDb = new DynamoDBClient({ region: config.aws_region });
 
 app.use(parser.body.json({ strict: false }));
 app.use(parser.body.urlencoded({ extended: false }));
@@ -87,7 +86,6 @@ app.route("/callback").get(function (req, res, next) {
               data = JSON.parse(data);
               req.session.twitterScreenName = data["screen_name"];
               req.session.twitterUserId = data["id_str"];
-              //this become undefined when there's no tweet
               if (typeof data["status"]["id_str"] === "undefined") {
                 res.status(404).json({ error: "Can't find any tweets" });
               }
@@ -103,11 +101,11 @@ app.route("/callback").get(function (req, res, next) {
 
 app
   .route("/upload")
-  .post(upload.single("fileUploaded"), function (req, res, next) {
+  .post(upload.single("fileUploaded"), async function (req, res, next) {
     if (req.file) {
       let zip = new AdmZip(req.file.path);
       let zipEntries = zip.getEntries();
-      zipEntries.forEach(function (zipEntry) {
+      zipEntries.forEach(async function (zipEntry) {
         if (zipEntry.entryName == "tweet.js") {
           let tweet_archive = zipEntry.getData().toString("utf8").split("\n");
           tweet_archive[0] = "[{";
@@ -118,116 +116,50 @@ app
             let id = tweet_archive[i].tweet.id_str;
             id_list.push(id);
           }
-          // TODO: split IDs per 20k as dynamoDB max item size is 400kb
           const params = {
             TableName: config.table_name,
             Item: {
-              jobId: req.file.filename,
-              token: req.body.token,
-              secret: req.body.secret,
-              tweet_no: tweet_archive.length,
-              tweet_ids: id_list,
+              jobId: { S: req.file.filename },
+              token: { S: req.body.token },
+              secret: { S: req.body.secret },
+              tweet_no: { N: tweet_archive.length.toString() },
+              tweet_ids: { L: id_list.map(id => ({ S: id })) },
             },
           };
-
-          dynamoDb.put(params, (error) => {
-            if (error) {
-              res.status(500).json({ error: "Could not create the job" });
-            }
-          });
-          res.redirect("/post-upload/" + req.file.filename);
-          if(fs.exists(req.file.path)) fs.unlinkSync(req.file.path);
-        }
-      });
-    }
-    res
-      .status(404)
-      .json({ error: "Could not find tweet.js from the uploaded file" });
-  });
-
-app.route("/delete-recent").post(function (req, res, next) {
-  let max_id = req.body.last_tweet_id;
-  let id_list = [];
-  let count = 0;
-  let loop = true;
-
-  async.whilst(
-    function () {
-      return loop;
-    },
-    function (next) {
-      consumer().get(
-        "https://api.twitter.com/1.1/statuses/user_timeline.json?exclude_replies=false&include_rts=true&count=200&user_id=" +
-          req.body.user_id +
-          "&max_id=" +
-          max_id,
-        req.body.token,
-        req.body.secret,
-        function (error, data, response) {
-          if (error) {
-            return res
-              .status(500)
-              .json({ error: "Could not get the timeline" });
-          } else {
-            data = JSON.parse(data);
-            count += data.length;
-            max_id = data.slice(-1)[0].id_str;
-            for (tweet_id in data) {
-              let id = data[tweet_id].id_str;
-              id_list.push(id);
-            }
-            if (data.length !== 200) {
-              loop = false;
-            }
+          try {
+            await dynamoDb.send(new PutCommand(params));
+            res.redirect("/post-upload/" + req.file.filename);
+            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+          } catch (error) {
+            res.status(500).json({ error: "Could not create the job" });
           }
         }
-      );
-      setTimeout(next, 500);
-    },
-    function () {
-      let jobId = Math.random().toString(36).substring(7);
-      const params = {
-        TableName: config.table_name,
-        Item: {
-          jobId: jobId,
-          token: req.body.token,
-          secret: req.body.secret,
-          tweet_no: count,
-          tweet_ids: id_list,
-        },
-      };
-      dynamoDb.put(params, (error) => {
-        if (error) {
-          res.status(500).json({ error: "Could not create the job" });
-        }
       });
-      res.render("post-upload", { jobId: jobId });
+    } else {
+      res
+        .status(404)
+        .json({ error: "Could not find tweet.js from the uploaded file" });
     }
-  );
-});
+  });
 
-app.route("/post-upload/:jobId").get(function (req, res, next) {
-  res.render("post-upload", { jobId: req.params.jobId });
-});
-
-app.route("/status/:jobId").get(function (req, res, next) {
+app.route("/status/:jobId").get(async function (req, res, next) {
   const params = {
     TableName: config.table_name,
     Key: {
-      jobId: req.params.jobId,
+      jobId: { S: req.params.jobId },
     },
   };
-  dynamoDb.get(params, (error, result) => {
-    if (error) {
-      res.status(404).json({ error: "Could not get the job" });
+
+  try {
+    const result = await dynamoDb.send(new GetCommand(params));
+    if (result.Item) {
+      res.render("status", { item: result.Item });
     } else {
-      if (typeof result.Item !== "undefined" && result) {
-        res.render("status", { item: result.Item });
-      } else {
-        res.status(404).json({ error: "job not found. maybe completed?" });
-      }
+      res.status(404).json({ error: "job not found. maybe completed?" });
     }
-  });
+  } catch (error) {
+    res.status(404).json({ error: "Could not get the job" });
+  }
 });
 
 module.exports = app;
