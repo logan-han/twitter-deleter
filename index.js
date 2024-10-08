@@ -141,18 +141,19 @@ app.route("/callback").get(function (req, res, next) {
           req.session.secret,
           function (error, data, response) {
             if (error) {
-              res
-                .status(500)
-                .json({ error: "Failed to verify the auth token" });
+              res.status(500).json({ error: "Failed to verify the auth token" });
             } else {
               data = JSON.parse(data);
               req.session.twitterScreenName = data["screen_name"];
               req.session.twitterUserId = data["id_str"];
-              if (typeof data["status"]["id_str"] === "undefined") {
+
+              // Add check for data["status"] before accessing it
+              if (!data["status"] || typeof data["status"]["id_str"] === "undefined") {
                 res.status(404).json({ error: "Can't find any tweets" });
+              } else {
+                req.session.lastTweetId = data["status"]["id_str"];
+                res.render("callback", { session: req.session });
               }
-              req.session.lastTweetId = data["status"]["id_str"];
-              res.render("callback", { session: req.session });
             }
           }
         );
