@@ -2,7 +2,7 @@ service: twitter-deleter
 
 provider:
   name: aws
-  runtime: nodejs14.x
+  runtime: nodejs18.x
   region: ap-southeast-2
   versionFunctions: false
   apiGateway:
