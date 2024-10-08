@@ -16,7 +16,7 @@ jobs:
     - name: prep nodeJS
       uses: actions/setup-node@v2
       with:
-        node-version: '12'
+        node-version: '16'
 
     - name: Install Serverless Framework
       run: npm install -g serverless
