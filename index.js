@@ -62,6 +62,68 @@ app.route("/auth").get(function (req, res, next) {
   });
 });
 
+app.route("/delete-recent").post(function (req, res, next) {
+  let max_id = req.body.last_tweet_id;
+  let id_list = [];
+  let count = 0;
+  let loop = true;
+
+  async.whilst(
+    function () {
+      return loop;
+    },
+    function (next) {
+      consumer().get(
+        "https://api.twitter.com/1.1/statuses/user_timeline.json?exclude_replies=false&include_rts=true&count=200&user_id=" +
+          req.body.user_id +
+          "&max_id=" +
+          max_id,
+        req.body.token,
+        req.body.secret,
+        function (error, data, response) {
+          if (error) {
+            return res.status(500).json({ error: "Could not get the timeline" });
+          } else {
+            data = JSON.parse(data);
+            count += data.length;
+            max_id = data.slice(-1)[0].id_str;
+            for (let tweet of data) {
+              let id = tweet.id_str;
+              id_list.push(id);
+            }
+            if (data.length !== 200) {
+              loop = false;
+            }
+          }
+        }
+      );
+      setTimeout(next, 500);
+    },
+    async function () {
+      let jobId = Math.random().toString(36).substring(7);
+
+      // Save job details in DynamoDB
+      const params = {
+        TableName: config.table_name,
+        Item: {
+          jobId: jobId,
+          token: req.body.token,
+          secret: req.body.secret,
+          tweet_no: count,
+          tweet_ids: id_list,
+        },
+      };
+
+      try {
+        await ddbClient.send(new PutCommand(params));
+        res.render("post-upload", { jobId: jobId });
+      } catch (error) {
+        res.status(500).json({ error: "Could not create the job" });
+      }
+    }
+  );
+});
+
 app.route("/callback").get(function (req, res, next) {
   consumer().getOAuthAccessToken(
     req.session.token,
