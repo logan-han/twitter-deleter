@@ -82,6 +82,7 @@ app.route("/delete-recent").post(function (req, res, next) {
         req.body.secret,
         function (error, data, response) {
           if (error) {
+            console.error("Error getting timeline:", error);
             return res.status(500).json({ error: "Could not get the timeline" });
           } else {
             data = JSON.parse(data);
