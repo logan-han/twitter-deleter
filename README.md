@@ -1,5 +1,9 @@
-[![Build and Deploy](https://github.com/logan-han/twitter-deleter/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/logan-han/twitter-deleter/actions/workflows/deploy.yml)
-[![codecov](https://codecov.io/gh/logan-han/twitter-deleter/branch/main/graph/badge.svg?token=LhKvIYdu4P)](https://codecov.io/gh/logan-han/twitter-deleter)
+# DEPRECATED
+
+The new X API V2 comes with almost unusable limitation.
+> Retrieve up to 100 Posts and 500 writes per month
+
+Whereas their paid plan starts from $175/month.
 
 # Older Twitter Deleter
 
