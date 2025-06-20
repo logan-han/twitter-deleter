@@ -1,10 +1,31 @@
 const config = require("./config.js");
-const { DynamoDBClient, ScanCommand, DeleteCommand, UpdateItemCommand } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBClient, ScanCommand, DeleteItemCommand, UpdateItemCommand } = require("@aws-sdk/client-dynamodb");
 const { TwitterApi } = require("twitter-api-v2");
 const RateLimiter = require("./rate-limiter.js");
 
 const dynamoDb = new DynamoDBClient({ region: config.aws_region });
 const rateLimiter = new RateLimiter();
+
+// Function to refresh Twitter access token
+async function refreshTwitterToken(refreshToken) {
+  try {
+    const twitterClient = new TwitterApi({
+      clientId: config.consumer_key,
+      clientSecret: config.consumer_secret,
+    });
+    
+    const refreshedToken = await twitterClient.refreshOAuth2Token(refreshToken);
+    
+    return {
+      accessToken: refreshedToken.accessToken,
+      refreshToken: refreshedToken.refreshToken || refreshToken,
+      expiresIn: refreshedToken.expiresIn
+    };
+  } catch (error) {
+    console.error("Failed to refresh token:", error);
+    throw error;
+  }
+}
 
 exports.handler = async function (event, context) {
   // First, get all jobs and process them in order (oldest first)
@@ -138,7 +159,7 @@ exports.handler = async function (event, context) {
             TableName: config.table_name,
             Key: { jobId: { S: jobId } },
           };
-          await dynamoDb.send(new DeleteCommand(deleteParams));
+          await dynamoDb.send(new DeleteItemCommand(deleteParams));
           console.log(`No tweets found for job ${jobId}, deleted job`);
           return;
         }
@@ -181,6 +202,44 @@ exports.handler = async function (event, context) {
           };
           await dynamoDb.send(new UpdateItemCommand(updateParams));
           console.log(`Job ${jobId} still rate limited, updated reset time with buffer`);
+        } else if (fetchError.code === 401) {
+          // Unauthorized - try to refresh token
+          const refreshToken = jobItem.refresh_token?.S;
+          if (refreshToken) {
+            try {
+              console.log(`Token expired for job ${jobId}, attempting refresh...`);
+              const newTokens = await refreshTwitterToken(refreshToken);
+              
+              // Update job with new tokens
+              const updateParams = {
+                TableName: config.table_name,
+                Key: { jobId: { S: jobId } },
+                UpdateExpression: "set token = :t, refresh_token = :r",
+                ExpressionAttributeValues: {
+                  ":t": { S: newTokens.accessToken },
+                  ":r": { S: newTokens.refreshToken }
+                },
+              };
+              await dynamoDb.send(new UpdateItemCommand(updateParams));
+              console.log(`Refreshed tokens for job ${jobId}, will retry next run`);
+            } catch (refreshError) {
+              console.error(`Failed to refresh token for job ${jobId}:`, refreshError);
+              // Delete job if token refresh fails
+              const deleteParams = {
+                TableName: config.table_name,
+                Key: { jobId: { S: jobId } },
+              };
+              await dynamoDb.send(new DeleteItemCommand(deleteParams));
+              console.log(`Deleted job ${jobId} due to token refresh failure`);
+            }
+          } else {
+            console.error(`No refresh token available for job ${jobId}, deleting job`);
+            const deleteParams = {
+              TableName: config.table_name,
+              Key: { jobId: { S: jobId } },
+            };
+            await dynamoDb.send(new DeleteItemCommand(deleteParams));
+          }
         } else {
           // Other error, delete the job
           console.error(`Fatal error fetching tweets for job ${jobId}, deleting job`);
@@ -188,7 +247,7 @@ exports.handler = async function (event, context) {
             TableName: config.table_name,
             Key: { jobId: { S: jobId } },
           };
-          await dynamoDb.send(new DeleteCommand(deleteParams));
+          await dynamoDb.send(new DeleteItemCommand(deleteParams));
         }
         return;
       }
@@ -210,7 +269,7 @@ exports.handler = async function (event, context) {
         TableName: config.table_name,
         Key: { jobId: { S: jobId } },
       };
-      await dynamoDb.send(new DeleteCommand(deleteParams));
+      await dynamoDb.send(new DeleteItemCommand(deleteParams));
       console.log("Item Deleted - " + jobId);
     } else {
       const updateParams = {
@@ -281,6 +340,49 @@ exports.handler = async function (event, context) {
           await dynamoDb.send(new UpdateItemCommand(updateParams));
           console.log(`Job ${jobId} converted to rate-limited due to 429 during deletion`);
           return; // Stop processing this job
+        } else if (error.code === 401) {
+          // Unauthorized - try to refresh token
+          const refreshToken = jobItem.refresh_token?.S;
+          if (refreshToken) {
+            try {
+              console.log(`Token expired during deletion for job ${jobId}, attempting refresh...`);
+              const newTokens = await refreshTwitterToken(refreshToken);
+              
+              // Update job with new tokens and save remaining tweets
+              const remainingTweets = to_delete_list.slice(i).concat(tweet_ids);
+              const updateParams = {
+                TableName: config.table_name,
+                Key: { jobId: { S: jobId } },
+                UpdateExpression: "set token = :t, refresh_token = :r, tweet_ids = :tweets",
+                ExpressionAttributeValues: {
+                  ":t": { S: newTokens.accessToken },
+                  ":r": { S: newTokens.refreshToken },
+                  ":tweets": { L: remainingTweets.map(id => ({ S: id })) }
+                },
+              };
+              await dynamoDb.send(new UpdateItemCommand(updateParams));
+              console.log(`Refreshed tokens for job ${jobId} and saved remaining tweets, will retry next run`);
+              return; // Stop processing this job
+            } catch (refreshError) {
+              console.error(`Failed to refresh token for job ${jobId}:`, refreshError);
+              // Delete job if token refresh fails
+              const deleteParams = {
+                TableName: config.table_name,
+                Key: { jobId: { S: jobId } },
+              };
+              await dynamoDb.send(new DeleteItemCommand(deleteParams));
+              console.log(`Deleted job ${jobId} due to token refresh failure during deletion`);
+              return;
+            }
+          } else {
+            console.error(`No refresh token available for job ${jobId} during deletion, deleting job`);
+            const deleteParams = {
+              TableName: config.table_name,
+              Key: { jobId: { S: jobId } },
+            };
+            await dynamoDb.send(new DeleteItemCommand(deleteParams));
+            return;
+          }
         }
         
         // Continue with other tweets even if one fails (for non-rate-limit errors)
