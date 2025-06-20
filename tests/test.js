@@ -32,10 +32,10 @@ describe("Route Checks", () => {
     });
   });
   describe("GET /callback", () => {
-    it("should return 500", (done) => {
+    it("should return 400 for missing parameters", (done) => {
       request.get("/callback").end((err, res) => {
         if (err) done(err);
-        res.status.should.equal(500);
+        res.status.should.equal(400);
         done();
       });
     });
