@@ -71,6 +71,43 @@ function createTwitterClient() {
   });
 }
 
+// Helper function to calculate queue position
+function calculateQueuePosition(allJobs, currentJobId) {
+  // Filter out session data and get actual jobs
+  const actualJobs = allJobs.filter(item => {
+    const jobId = item.jobId?.S || '';
+    return !jobId.startsWith('session_');
+  });
+  
+  // Sort by creation time (oldest first)
+  const sortedJobs = actualJobs.sort((a, b) => {
+    const timeA = parseInt(a.created_at?.N || "0");
+    const timeB = parseInt(b.created_at?.N || "0");
+    return timeA - timeB;
+  });
+  
+  // Find position of current job
+  const currentJobIndex = sortedJobs.findIndex(job => job.jobId.S === currentJobId);
+  
+  if (currentJobIndex === -1) {
+    return { queuePosition: 1, jobsAhead: 0 };
+  }
+  
+  // Count jobs ahead that are still active (not completed)
+  let jobsAhead = 0;
+  for (let i = 0; i < currentJobIndex; i++) {
+    const job = sortedJobs[i];
+    const jobStatus = job.status?.S || "normal";
+    
+    // Count jobs that still exist and are not completed
+    if (jobStatus === "normal" || jobStatus === "rate_limited") {
+      jobsAhead++;
+    }
+  }
+  
+  return { queuePosition: jobsAhead + 1, jobsAhead };
+}
+
 // Add a simple favicon route to prevent interference
 app.route("/favicon.ico").get(function (req, res) {
   res.status(204).end();
@@ -187,7 +224,7 @@ app.route("/delete-recent").post(async function (req, res, next) {
     };
 
     await dynamoDb.send(new PutItemCommand(params));
-    res.render("post-upload", { jobId: jobId, tweetCount: count });
+    res.redirect(`/status/${jobId}`);
     
   } catch (error) {
     console.error("Error in delete-recent:", error);
@@ -217,51 +254,11 @@ app.route("/delete-recent").post(async function (req, res, next) {
             return !jobId.startsWith('session_');
           });
           
-          if (actualJobs.length === 0) {
-            queuePosition = 0;
-          } else {
-            // Sort all jobs by creation time to understand queue order
-            const sortedJobs = actualJobs.sort((a, b) => {
-              const timeA = parseInt(a.created_at?.N || "0");
-              const timeB = parseInt(b.created_at?.N || "0");
-              return timeA - timeB;
-            });
-            
-            // Find jobs that will be processed before this new job
-            let jobsAhead = 0;
-            let latestProcessingTime = currentTime;
-            
-            for (const job of sortedJobs) {
-              const jobStatus = job.status?.S || "normal";
-              const jobResetTime = parseInt(job.rate_limit_reset?.N || "0");
-              
-              if (jobStatus === "rate_limited") {
-                // This job will start after its rate limit resets
-                const jobStartTime = Math.max(jobResetTime, latestProcessingTime);
-                
-                // If this existing job will start before our new job, it's ahead of us
-                if (jobStartTime < newJobResetTime) {
-                  jobsAhead++;
-                  // Assume each job takes 5 minutes to process
-                  latestProcessingTime = jobStartTime + (5 * 60);
-                }
-              } else {
-                // Normal job will be processed immediately
-                jobsAhead++;
-                latestProcessingTime = latestProcessingTime + (5 * 60);
-              }
-            }
-            
-            queuePosition = jobsAhead;
-            earliestResetTime = Math.min(...actualJobs
-              .filter(job => job.status?.S === "rate_limited")
-              .map(job => parseInt(job.rate_limit_reset?.N || "0"))
-              .filter(time => time > currentTime)
-            ) || 0;
-          }
+          // Simple queue position: count jobs created before this one
+          queuePosition = actualJobs.length;
         }
         
-        console.log(`Current queue position: ${queuePosition + 1}, earliest reset: ${earliestResetTime}`);
+        console.log(`Jobs in queue: ${queuePosition}, new job will be position: ${queuePosition + 1}`);
       } catch (queueError) {
         console.error("Error checking queue:", queueError);
         // Continue with default estimation
@@ -294,7 +291,6 @@ app.route("/delete-recent").post(async function (req, res, next) {
           user_id: { S: req.body.user_id },
           status: { S: "rate_limited" },
           rate_limit_reset: { N: resetTime.toString() },
-          queue_position: { N: (queuePosition + 1).toString() },
           tweet_no: { N: "0" }, // Will be populated when actually fetched
           tweet_ids: { L: [] }, // Will be populated when actually fetched
           created_at: { N: currentTime.toString() }
@@ -320,11 +316,7 @@ app.route("/delete-recent").post(async function (req, res, next) {
           message = `Rate limited by Twitter. You are #${queuePosition + 1} in the queue behind ${queuePosition} other user${queuePosition === 1 ? '' : 's'}. Your job will start in approximately ${queueTimeStr}.`;
         }
         
-        res.render("post-upload", { 
-          jobId: jobId, 
-          tweetCount: "pending", 
-          message: message
-        });
+        res.redirect(`/status/${jobId}`);
       } catch (dbError) {
         console.error("Error saving rate-limited job:", dbError);
         res.status(500).json({ error: "Could not save job for retry" });
@@ -469,8 +461,8 @@ app
             },
           };
           try {
-            await dynamoDb.send(new PutCommand(params));
-            res.redirect("/post-upload/" + req.file.filename);
+            await dynamoDb.send(new PutItemCommand(params));
+            res.redirect(`/status/${req.file.filename}`);
             if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
           } catch (error) {
             res.status(500).json({ error: "Could not create the job" });
@@ -523,43 +515,15 @@ app.route("/status/:jobId").get(async function (req, res, next) {
         const queueResult = await dynamoDb.send(new ScanCommand(queueParams));
         
         if (queueResult.Items) {
-          // Filter out session data and get actual jobs
-          const actualJobs = queueResult.Items.filter(item => {
-            const jobId = item.jobId?.S || '';
-            return !jobId.startsWith('session_');
-          });
+          // Use helper function to calculate queue position
+          const { queuePosition, jobsAhead } = calculateQueuePosition(queueResult.Items, req.params.jobId);
           
-          // Sort by creation time to get queue order
-          const sortedJobs = actualJobs.sort((a, b) => {
-            const timeA = parseInt(a.created_at?.N || "0");
-            const timeB = parseInt(b.created_at?.N || "0");
-            return timeA - timeB;
-          });
-          
-          // Find position of current job
-          const currentJobIndex = sortedJobs.findIndex(job => job.jobId.S === req.params.jobId);
-          let queuePosition = 0;
-          
-          if (currentJobIndex !== -1) {
-            // Count jobs ahead that will be processed before this one
-            for (let i = 0; i < currentJobIndex; i++) {
-              const job = sortedJobs[i];
-              const otherJobStatus = job.status?.S || "normal";
-              const otherJobResetTime = parseInt(job.rate_limit_reset?.N || "0");
-              
-              if (otherJobStatus === "normal" || 
-                  (otherJobStatus === "rate_limited" && otherJobResetTime <= resetTime)) {
-                queuePosition++;
-              }
-            }
-          }
-          
-          statusInfo.queuePosition = queuePosition + 1;
-          statusInfo.jobsAhead = queuePosition;
+          statusInfo.queuePosition = queuePosition;
+          statusInfo.jobsAhead = jobsAhead;
           
           // Calculate estimated wait time
           const rateLimitWaitMinutes = Math.ceil(timeUntilReset / 60);
-          const queueWaitMinutes = queuePosition * 5; // Assume 5 min per job
+          const queueWaitMinutes = jobsAhead * 5; // Assume 5 min per job
           const totalWaitMinutes = Math.max(rateLimitWaitMinutes, queueWaitMinutes);
           
           statusInfo.estimatedWaitTime = {
@@ -639,43 +603,15 @@ app.route("/api/status/:jobId").get(async function (req, res, next) {
         const queueResult = await dynamoDb.send(new ScanCommand(queueParams));
         
         if (queueResult.Items) {
-          // Filter out session data and get actual jobs
-          const actualJobs = queueResult.Items.filter(item => {
-            const jobId = item.jobId?.S || '';
-            return !jobId.startsWith('session_');
-          });
+          // Use helper function to calculate queue position
+          const { queuePosition, jobsAhead } = calculateQueuePosition(queueResult.Items, req.params.jobId);
           
-          // Sort by creation time to get queue order
-          const sortedJobs = actualJobs.sort((a, b) => {
-            const timeA = parseInt(a.created_at?.N || "0");
-            const timeB = parseInt(b.created_at?.N || "0");
-            return timeA - timeB;
-          });
-          
-          // Find position of current job
-          const currentJobIndex = sortedJobs.findIndex(job => job.jobId.S === req.params.jobId);
-          let queuePosition = 0;
-          
-          if (currentJobIndex !== -1) {
-            // Count jobs ahead that will be processed before this one
-            for (let i = 0; i < currentJobIndex; i++) {
-              const job = sortedJobs[i];
-              const otherJobStatus = job.status?.S || "normal";
-              const otherJobResetTime = parseInt(job.rate_limit_reset?.N || "0");
-              
-              if (otherJobStatus === "normal" || 
-                  (otherJobStatus === "rate_limited" && otherJobResetTime <= resetTime)) {
-                queuePosition++;
-              }
-            }
-          }
-          
-          statusInfo.queuePosition = queuePosition + 1;
-          statusInfo.jobsAhead = queuePosition;
+          statusInfo.queuePosition = queuePosition;
+          statusInfo.jobsAhead = jobsAhead;
           
           // Calculate estimated wait time
           const rateLimitWaitMinutes = Math.ceil(timeUntilReset / 60);
-          const queueWaitMinutes = queuePosition * 5; // Assume 5 min per job
+          const queueWaitMinutes = jobsAhead * 5; // Assume 5 min per job
           const totalWaitMinutes = Math.max(rateLimitWaitMinutes, queueWaitMinutes);
           
           statusInfo.estimatedWaitTime = {
