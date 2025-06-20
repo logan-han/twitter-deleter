@@ -8,6 +8,13 @@
 
 <body>
 <h1> Hello, <%= session.twitterScreenName %> </h1>
+
+<% if (typeof message !== 'undefined') { %>
+<div class="alert alert-warning" role="alert">
+    <%= message %>
+</div>
+<% } %>
+
 <H3>To delete your older than 3,200 recent tweets, please follow below steps:</H3>
 <ol>
     <li><a href="https://x.com/settings/download_your_data">Get your X (Twitter) archive zip</a></li>
@@ -23,6 +30,8 @@
     </div>
     <button type="submit" class="btn btn-default">Upload</button>
 </form>
+
+<% if (session.lastTweetId) { %>
 <h3>Or, just delete your recent 3,200 tweets:</h3>
 <form class="form-inline" method="post" action="delete-recent">
     <input type="hidden" name="token" value="<%= session.accessToken %>">
@@ -31,6 +40,7 @@
     <input type="hidden" name="last_tweet_id" value="<%= session.lastTweetId %>">
     <button type="submit" class="btn btn-primary">Delete Recent Tweets Only</button>
 </form>
+<% } %>
 
 </body>
 </html>

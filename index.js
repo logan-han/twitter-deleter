@@ -1,7 +1,8 @@
 const config = require("./config.js");
+const SessionStore = require("./session-store.js");
 const serverless = require("serverless-http");
 const express = require("express");
-const { DynamoDBClient, PutCommand, GetCommand } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBClient, PutItemCommand, GetItemCommand } = require("@aws-sdk/client-dynamodb");
 const { TwitterApi } = require("twitter-api-v2");
 const crypto = require("crypto");
 const fs = require("fs-extra");
@@ -17,12 +18,60 @@ const parser = {
 
 const app = express();
 const dynamoDb = new DynamoDBClient({ region: config.aws_region });
+const sessionStore = new SessionStore(dynamoDb, config.table_name);
 
 app.use(parser.body.json({ strict: false }));
 app.use(parser.body.urlencoded({ extended: false }));
+app.use(parser.cookie());
 app.engine("html", require("ejs").renderFile);
 app.set("view engine", "html");
 app.listen(config.port);
+
+// Middleware to handle sessions
+async function getSessionData(req) {
+  const sessionId = req.cookies.sessionId;
+  console.log("Getting session data for ID:", sessionId);
+  if (!sessionId) {
+    console.log("No session ID found in cookies");
+    return null;
+  }
+  const data = await sessionStore.getSession(sessionId);
+  console.log("Session data retrieved:", data ? "found" : "not found");
+  return data;
+}
+
+async function saveSessionData(res, sessionData) {
+  const sessionId = sessionStore.generateSessionId();
+  console.log("Saving session data with ID:", sessionId);
+  await sessionStore.saveSession(sessionId, sessionData);
+  res.cookie('sessionId', sessionId, { 
+    httpOnly: true, 
+    maxAge: 3600000, // 1 hour
+    secure: true, // Required for HTTPS
+    sameSite: 'lax' // Allow cross-site requests for OAuth
+  });
+  return sessionId;
+}
+
+// Alternative: Use state parameter to store session ID
+async function saveSessionWithState(sessionData) {
+  const sessionId = sessionStore.generateSessionId();
+  console.log("Saving session data with state ID:", sessionId);
+  await sessionStore.saveSession(sessionId, sessionData);
+  return sessionId;
+}
+
+async function getSessionFromState(stateParam) {
+  // Extract session ID from state parameter (format: sessionId_randomState)
+  const parts = stateParam.split('_');
+  if (parts.length !== 2) return null;
+  
+  const sessionId = parts[0];
+  console.log("Getting session data from state for ID:", sessionId);
+  const data = await sessionStore.getSession(sessionId);
+  console.log("Session data from state retrieved:", data ? "found" : "not found");
+  return data;
+}
 
 app.use(
   parser.session({
@@ -46,18 +95,35 @@ function createTwitterClient() {
   });
 }
 
+// Add a simple favicon route to prevent interference
+app.route("/favicon.ico").get(function (req, res) {
+  res.status(204).end();
+});
+
 app.route("/").get(function (req, res, next) {
   res.render("index");
 });
 
-app.route("/auth").get(function (req, res, next) {
+app.route("/auth").get(async function (req, res, next) {
   try {
     const { codeVerifier, codeChallenge } = generateCodeChallenge();
-    const state = crypto.randomBytes(32).toString('hex');
+    const randomState = crypto.randomBytes(16).toString('hex');
     
     // Store PKCE verifier and state in session
-    req.session.codeVerifier = codeVerifier;
-    req.session.state = state;
+    const sessionData = {
+      codeVerifier,
+      state: randomState,
+      timestamp: Date.now()
+    };
+    
+    // Save session and get session ID
+    const sessionId = await saveSessionWithState(sessionData);
+    
+    // Also try to set cookie as backup
+    await saveSessionData(res, sessionData);
+    
+    // Embed session ID in state parameter: sessionId_randomState
+    const stateParam = `${sessionId}_${randomState}`;
     
     // Build OAuth 2.0 authorization URL
     const authUrl = `https://twitter.com/i/oauth2/authorize?` +
@@ -65,10 +131,11 @@ app.route("/auth").get(function (req, res, next) {
       `client_id=${encodeURIComponent(config.consumer_key)}&` +
       `redirect_uri=${encodeURIComponent(config.callback_url)}&` +
       `scope=${encodeURIComponent(config.oauth2.scope)}&` +
-      `state=${encodeURIComponent(state)}&` +
+      `state=${encodeURIComponent(stateParam)}&` +
       `code_challenge=${encodeURIComponent(codeChallenge)}&` +
       `code_challenge_method=S256`;
     
+    console.log("Redirecting to auth URL with state:", stateParam);
     res.redirect(authUrl);
   } catch (error) {
     console.error("Auth error:", error);
@@ -132,64 +199,184 @@ app.route("/delete-recent").post(async function (req, res, next) {
 
 app.route("/callback").get(async function (req, res, next) {
   try {
-    const { code, state } = req.query;
+    const { code, state, error } = req.query;
     
-    // Verify state parameter
-    if (state !== req.session.state) {
-      return res.status(400).json({ error: "Invalid state parameter" });
+    console.log("Callback received:");
+    console.log("- Code:", code ? `${code.substring(0, 10)}...` : "null");
+    console.log("- State:", state);
+    console.log("- Error:", error);
+    
+    // Check if Twitter returned an error
+    if (error) {
+      console.error("Twitter OAuth error:", error);
+      return res.status(400).json({ error: `OAuth error: ${error}` });
     }
-
+    
     if (!code) {
+      console.log("No authorization code received");
       return res.status(400).json({ error: "No authorization code received" });
     }
 
+    // Try to get session data from state parameter first
+    let sessionData = await getSessionFromState(state);
+    
+    // If not found, try from cookies
+    if (!sessionData) {
+      console.log("Session not found in state, trying cookies...");
+      sessionData = await getSessionData(req);
+    }
+    
+    if (!sessionData) {
+      console.log("No session found in either state or cookies");
+      return res.status(400).json({ error: "No session found - please restart the authentication process" });
+    }
+    
+    // Check if this session has already been processed
+    if (sessionData.accessToken) {
+      console.log("Session already processed, redirecting to success page");
+      return res.render("callback", { session: sessionData });
+    }
+    
+    // Extract the random state part for verification
+    const stateParts = state.split('_');
+    const expectedState = stateParts.length === 2 ? stateParts[1] : state;
+    
+    // Verify state parameter
+    if (expectedState !== sessionData.state) {
+      console.log("State mismatch:", expectedState, "vs", sessionData.state);
+      return res.status(400).json({ error: "Invalid state parameter - possible CSRF attack" });
+    }
+    
+    // Check if this exact code has been processed already
+    if (sessionData.usedCode === code) {
+      console.log("Authorization code already used");
+      return res.status(400).json({ error: "Authorization code already used - please restart the authentication process" });
+    }
+    
+    // Mark this code as being processed
+    sessionData.usedCode = code;
+    const sessionId = stateParts.length === 2 ? stateParts[0] : null;
+    if (sessionId) {
+      await sessionStore.saveSession(sessionId, sessionData);
+    }
+
+    console.log("OAuth configuration:");
+    console.log("- Client ID:", config.consumer_key);
+    console.log("- Has Secret:", !!config.consumer_secret);
+    console.log("- Callback URL:", config.callback_url);
+    console.log("- Code Verifier length:", sessionData.codeVerifier ? sessionData.codeVerifier.length : "null");
+
     const twitterClient = createTwitterClient();
     
+    console.log("Attempting token exchange...");
+    
     // Exchange authorization code for access token
+    const tokenResponse = await twitterClient.loginWithOAuth2({
+      code,
+      codeVerifier: sessionData.codeVerifier,
+      redirectUri: config.callback_url,
+    });
+
+    console.log("Token exchange successful");
+    
     const {
       client: loggedClient,
       accessToken,
       refreshToken,
       expiresIn,
-    } = await twitterClient.loginWithOAuth2({
-      code,
-      codeVerifier: req.session.codeVerifier,
-      redirectUri: config.callback_url,
-    });
+    } = tokenResponse;
 
-    // Store tokens in session
-    req.session.accessToken = accessToken;
-    req.session.refreshToken = refreshToken;
+    // Update session with tokens
+    sessionData.accessToken = accessToken;
+    sessionData.refreshToken = refreshToken;
+    sessionData.expiresIn = expiresIn;
 
+    console.log("Getting user information...");
+    
     // Get user information
     const { data: userObject } = await loggedClient.v2.me({
       'user.fields': ['id', 'name', 'username']
     });
 
-    req.session.twitterScreenName = userObject.username;
-    req.session.twitterUserId = userObject.id;
+    console.log("User info retrieved:", userObject.username, userObject.id);
+
+    sessionData.twitterScreenName = userObject.username;
+    sessionData.twitterUserId = userObject.id;
 
     // Get user's latest tweets to find the last tweet ID
     try {
-      const userTweets = await loggedClient.v2.userTimeline(userObject.id, {
-        max_results: 5,
-        'tweet.fields': 'id,created_at'
-      });
+      console.log("Fetching tweets for user:", userObject.id);
+      
+      // Try different methods to get user tweets
+      let userTweets;
+      try {
+        // Method 1: userTweets (correct v2 API method)
+        userTweets = await loggedClient.v2.userTweets(userObject.id, {
+          max_results: 5,
+          'tweet.fields': ['id', 'created_at', 'text']
+        });
+      } catch (timelineError) {
+        console.log("userTweets failed, trying userTimeline method:", timelineError.message);
+        // Method 2: userTimeline (fallback)
+        try {
+          userTweets = await loggedClient.v2.userTimeline(userObject.id, {
+            max_results: 5,
+            'tweet.fields': ['id', 'created_at', 'text']
+          });
+        } catch (tweetsError) {
+          console.log("userTimeline method also failed:", tweetsError.message);
+          // Method 3: search recent tweets by user
+          userTweets = await loggedClient.v2.search(`from:${userObject.username}`, {
+            max_results: 5,
+            'tweet.fields': ['id', 'created_at', 'text']
+          });
+        }
+      }
+
+      console.log("API Response:", userTweets);
+      console.log("Tweets data:", userTweets.data);
+      console.log("Number of tweets found:", userTweets.data ? userTweets.data.length : 0);
 
       if (userTweets.data && userTweets.data.length > 0) {
-        req.session.lastTweetId = userTweets.data[0].id;
-        res.render("callback", { session: req.session });
+        sessionData.lastTweetId = userTweets.data[0].id;
+        sessionData.tweetsCount = userTweets.data.length;
+        
+        console.log("Found tweets, last tweet ID:", sessionData.lastTweetId);
+        
+        // Save updated session
+        await saveSessionData(res, sessionData);
+        
+        res.render("callback", { session: sessionData });
       } else {
-        res.status(404).json({ error: "Can't find any tweets" });
+        console.log("No tweets found in response");
+        // Still proceed but without lastTweetId
+        sessionData.tweetsCount = 0;
+        await saveSessionData(res, sessionData);
+        
+        // Instead of error, show success but indicate no tweets
+        res.render("callback", { 
+          session: sessionData,
+          message: "Authentication successful, but no tweets found. You can still upload a tweet archive."
+        });
       }
     } catch (tweetsError) {
       console.error("Error fetching user tweets:", tweetsError);
-      res.status(404).json({ error: "Can't find any tweets" });
+      console.error("Error details:", tweetsError.data || tweetsError.message);
+      
+      // Don't fail the whole auth process, just proceed without tweet data
+      sessionData.tweetsCount = 0;
+      await saveSessionData(res, sessionData);
+      
+      res.render("callback", { 
+        session: sessionData,
+        message: "Authentication successful, but couldn't fetch tweets. You can still upload a tweet archive."
+      });
     }
 
   } catch (error) {
     console.error("Callback error:", error);
-    res.status(500).json({ error: "Failed to complete authentication" });
+    console.error("Error details:", error.data || error.message);
+    res.status(500).json({ error: "Failed to complete authentication", details: error.message });
   }
 });
 
