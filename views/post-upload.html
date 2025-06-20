@@ -8,7 +8,12 @@
 
 <body>
 <h1> Deletion job scheduled </h1>
-<% if (typeof tweetCount !== 'undefined') { %>
+<% if (typeof message !== 'undefined') { %>
+<div class="alert alert-info" role="alert">
+    <%= message %>
+</div>
+<% } %>
+<% if (typeof tweetCount !== 'undefined' && tweetCount !== 'pending') { %>
 <p><strong><%= tweetCount %></strong> tweets found and queued for deletion.</p>
 <% } %>
 <h2> Wait 10 seconds and click below to check the status</a> </h2>
