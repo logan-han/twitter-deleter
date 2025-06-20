@@ -33,5 +33,9 @@ jobs:
            max_attempts: 3
            command: node_modules/.bin/jest --forceExit
         
-      - name: Codecov
-        uses: codecov/codecov-action@v1
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        if: success()
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
