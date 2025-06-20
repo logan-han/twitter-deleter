@@ -1,8 +1,7 @@
 const config = require("./config.js");
-const SessionStore = require("./session-store.js");
 const serverless = require("serverless-http");
 const express = require("express");
-const { DynamoDBClient, PutItemCommand, GetItemCommand } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require("@aws-sdk/client-dynamodb");
 const { TwitterApi } = require("twitter-api-v2");
 const crypto = require("crypto");
 const fs = require("fs-extra");
@@ -18,7 +17,6 @@ const parser = {
 
 const app = express();
 const dynamoDb = new DynamoDBClient({ region: config.aws_region });
-const sessionStore = new SessionStore(dynamoDb, config.table_name);
 
 app.use(parser.body.json({ strict: false }));
 app.use(parser.body.urlencoded({ extended: false }));
@@ -27,50 +25,28 @@ app.engine("html", require("ejs").renderFile);
 app.set("view engine", "html");
 app.listen(config.port);
 
-// Middleware to handle sessions
-async function getSessionData(req) {
-  const sessionId = req.cookies.sessionId;
-  console.log("Getting session data for ID:", sessionId);
-  if (!sessionId) {
-    console.log("No session ID found in cookies");
+// Simple state-based session handling (no DynamoDB needed for sessions)
+function generateState() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function encodeStateData(data) {
+  // Encode session data in the state parameter
+  const jsonStr = JSON.stringify(data);
+  return Buffer.from(jsonStr).toString('base64') + '_' + generateState();
+}
+
+function decodeStateData(stateParam) {
+  try {
+    const parts = stateParam.split('_');
+    if (parts.length !== 2) return null;
+    
+    const jsonStr = Buffer.from(parts[0], 'base64').toString();
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("Error decoding state data:", error);
     return null;
   }
-  const data = await sessionStore.getSession(sessionId);
-  console.log("Session data retrieved:", data ? "found" : "not found");
-  return data;
-}
-
-async function saveSessionData(res, sessionData) {
-  const sessionId = sessionStore.generateSessionId();
-  console.log("Saving session data with ID:", sessionId);
-  await sessionStore.saveSession(sessionId, sessionData);
-  res.cookie('sessionId', sessionId, { 
-    httpOnly: true, 
-    maxAge: 3600000, // 1 hour
-    secure: true, // Required for HTTPS
-    sameSite: 'lax' // Allow cross-site requests for OAuth
-  });
-  return sessionId;
-}
-
-// Alternative: Use state parameter to store session ID
-async function saveSessionWithState(sessionData) {
-  const sessionId = sessionStore.generateSessionId();
-  console.log("Saving session data with state ID:", sessionId);
-  await sessionStore.saveSession(sessionId, sessionData);
-  return sessionId;
-}
-
-async function getSessionFromState(stateParam) {
-  // Extract session ID from state parameter (format: sessionId_randomState)
-  const parts = stateParam.split('_');
-  if (parts.length !== 2) return null;
-  
-  const sessionId = parts[0];
-  console.log("Getting session data from state for ID:", sessionId);
-  const data = await sessionStore.getSession(sessionId);
-  console.log("Session data from state retrieved:", data ? "found" : "not found");
-  return data;
 }
 
 app.use(
@@ -116,14 +92,8 @@ app.route("/auth").get(async function (req, res, next) {
       timestamp: Date.now()
     };
     
-    // Save session and get session ID
-    const sessionId = await saveSessionWithState(sessionData);
-    
-    // Also try to set cookie as backup
-    await saveSessionData(res, sessionData);
-    
-    // Embed session ID in state parameter: sessionId_randomState
-    const stateParam = `${sessionId}_${randomState}`;
+    // Encode session data directly in state parameter (no DynamoDB needed)
+    const stateParam = encodeStateData(sessionData);
     
     // Build OAuth 2.0 authorization URL
     const authUrl = `https://twitter.com/i/oauth2/authorize?` +
@@ -135,7 +105,7 @@ app.route("/auth").get(async function (req, res, next) {
       `code_challenge=${encodeURIComponent(codeChallenge)}&` +
       `code_challenge_method=S256`;
     
-    console.log("Redirecting to auth URL with state:", stateParam);
+    console.log("Redirecting to auth URL with encoded state");
     res.redirect(authUrl);
   } catch (error) {
     console.error("Auth error:", error);
@@ -222,7 +192,146 @@ app.route("/delete-recent").post(async function (req, res, next) {
   } catch (error) {
     console.error("Error in delete-recent:", error);
     console.error("Error details:", error.data || error.message);
-    res.status(500).json({ error: "Could not fetch tweets or create job", details: error.message });
+    
+    // Handle rate limiting (429 error)
+    if (error.code === 429 && error.rateLimit) {
+      console.log("Rate limited. Reset time:", error.rateLimit.reset);
+      
+      // Check how many jobs are already in the queue and calculate proper position
+      const queueCheckParams = {
+        TableName: config.table_name,
+      };
+      
+      let queuePosition = 0;
+      let earliestResetTime = 0;
+      const currentTime = Math.floor(Date.now() / 1000);
+      const newJobResetTime = error.rateLimit.reset;
+      
+      try {
+        const queueResult = await dynamoDb.send(new ScanCommand(queueCheckParams));
+        
+        if (queueResult.Items && queueResult.Items.length > 0) {
+          // Filter out session data - only count actual jobs
+          const actualJobs = queueResult.Items.filter(item => {
+            const jobId = item.jobId?.S || '';
+            return !jobId.startsWith('session_');
+          });
+          
+          if (actualJobs.length === 0) {
+            queuePosition = 0;
+          } else {
+            // Sort all jobs by creation time to understand queue order
+            const sortedJobs = actualJobs.sort((a, b) => {
+              const timeA = parseInt(a.created_at?.N || "0");
+              const timeB = parseInt(b.created_at?.N || "0");
+              return timeA - timeB;
+            });
+            
+            // Find jobs that will be processed before this new job
+            let jobsAhead = 0;
+            let latestProcessingTime = currentTime;
+            
+            for (const job of sortedJobs) {
+              const jobStatus = job.status?.S || "normal";
+              const jobResetTime = parseInt(job.rate_limit_reset?.N || "0");
+              
+              if (jobStatus === "rate_limited") {
+                // This job will start after its rate limit resets
+                const jobStartTime = Math.max(jobResetTime, latestProcessingTime);
+                
+                // If this existing job will start before our new job, it's ahead of us
+                if (jobStartTime < newJobResetTime) {
+                  jobsAhead++;
+                  // Assume each job takes 5 minutes to process
+                  latestProcessingTime = jobStartTime + (5 * 60);
+                }
+              } else {
+                // Normal job will be processed immediately
+                jobsAhead++;
+                latestProcessingTime = latestProcessingTime + (5 * 60);
+              }
+            }
+            
+            queuePosition = jobsAhead;
+            earliestResetTime = Math.min(...actualJobs
+              .filter(job => job.status?.S === "rate_limited")
+              .map(job => parseInt(job.rate_limit_reset?.N || "0"))
+              .filter(time => time > currentTime)
+            ) || 0;
+          }
+        }
+        
+        console.log(`Current queue position: ${queuePosition + 1}, earliest reset: ${earliestResetTime}`);
+      } catch (queueError) {
+        console.error("Error checking queue:", queueError);
+        // Continue with default estimation
+      }
+      
+      // Create a job that will be retried after rate limit resets
+      let jobId = Math.random().toString(36).substring(7);
+      const resetTime = error.rateLimit.reset;
+      
+      // Calculate estimated start time based on proper queue analysis
+      // Assume each job takes ~5 minutes to process on average
+      const avgJobTimeMinutes = 5;
+      const rateLimitWaitMinutes = Math.ceil((resetTime - currentTime) / 60);
+      
+      // Calculate queue wait: jobs ahead * avg time per job
+      const queueWaitMinutes = queuePosition * avgJobTimeMinutes;
+      
+      // Total wait is the maximum of rate limit wait and queue processing time
+      const totalWaitMinutes = Math.max(rateLimitWaitMinutes, queueWaitMinutes);
+      
+      console.log(`Rate limit wait: ${rateLimitWaitMinutes}min, Queue wait: ${queueWaitMinutes}min, Total: ${totalWaitMinutes}min`);
+      
+      // Save job with rate limit info
+      const params = {
+        TableName: config.table_name,
+        Item: {
+          jobId: { S: jobId },
+          token: { S: req.body.token },
+          refresh_token: { S: req.body.refresh_token || '' },
+          user_id: { S: req.body.user_id },
+          status: { S: "rate_limited" },
+          rate_limit_reset: { N: resetTime.toString() },
+          queue_position: { N: (queuePosition + 1).toString() },
+          tweet_no: { N: "0" }, // Will be populated when actually fetched
+          tweet_ids: { L: [] }, // Will be populated when actually fetched
+          created_at: { N: currentTime.toString() }
+        },
+      };
+      
+      try {
+        await dynamoDb.send(new PutItemCommand(params));
+        
+        let message;
+        if (queuePosition === 0) {
+          message = `Rate limited by Twitter. Your job will start automatically in ~${rateLimitWaitMinutes} minutes when the rate limit resets.`;
+        } else {
+          const queueWaitHours = Math.floor(queueWaitMinutes / 60);
+          const queueWaitMins = queueWaitMinutes % 60;
+          let queueTimeStr = "";
+          if (queueWaitHours > 0) {
+            queueTimeStr = `${queueWaitHours}h ${queueWaitMins}m`;
+          } else {
+            queueTimeStr = `${queueWaitMins}m`;
+          }
+          
+          message = `Rate limited by Twitter. You are #${queuePosition + 1} in the queue behind ${queuePosition} other user${queuePosition === 1 ? '' : 's'}. Your job will start in approximately ${queueTimeStr}.`;
+        }
+        
+        res.render("post-upload", { 
+          jobId: jobId, 
+          tweetCount: "pending", 
+          message: message
+        });
+      } catch (dbError) {
+        console.error("Error saving rate-limited job:", dbError);
+        res.status(500).json({ error: "Could not save job for retry" });
+      }
+    } else {
+      res.status(500).json({ error: "Could not fetch tweets or create job", details: error.message });
+    }
   }
 });
 
@@ -246,18 +355,12 @@ app.route("/callback").get(async function (req, res, next) {
       return res.status(400).json({ error: "No authorization code received" });
     }
 
-    // Try to get session data from state parameter first
-    let sessionData = await getSessionFromState(state);
-    
-    // If not found, try from cookies
-    if (!sessionData) {
-      console.log("Session not found in state, trying cookies...");
-      sessionData = await getSessionData(req);
-    }
+    // Get session data from state parameter
+    let sessionData = decodeStateData(state);
     
     if (!sessionData) {
-      console.log("No session found in either state or cookies");
-      return res.status(400).json({ error: "No session found - please restart the authentication process" });
+      console.log("Failed to decode session data from state parameter");
+      return res.status(400).json({ error: "Invalid session state - please restart the authentication process" });
     }
     
     // Check if this session has already been processed
@@ -267,8 +370,7 @@ app.route("/callback").get(async function (req, res, next) {
     }
     
     // Extract the random state part for verification
-    const stateParts = state.split('_');
-    const expectedState = stateParts.length === 2 ? stateParts[1] : state;
+    const expectedState = sessionData.state;
     
     // Verify state parameter
     if (expectedState !== sessionData.state) {
@@ -282,12 +384,8 @@ app.route("/callback").get(async function (req, res, next) {
       return res.status(400).json({ error: "Authorization code already used - please restart the authentication process" });
     }
     
-    // Mark this code as being processed
+    // Mark this code as being processed (in memory only)
     sessionData.usedCode = code;
-    const sessionId = stateParts.length === 2 ? stateParts[0] : null;
-    if (sessionId) {
-      await sessionStore.saveSession(sessionId, sessionData);
-    }
 
     console.log("OAuth configuration:");
     console.log("- Client ID:", config.consumer_key);
@@ -332,8 +430,7 @@ app.route("/callback").get(async function (req, res, next) {
     sessionData.twitterScreenName = userObject.username;
     sessionData.twitterUserId = userObject.id;
 
-    // Save updated session
-    await saveSessionData(res, sessionData);
+    // No need to save session - it's stateless now
     
     res.render("callback", { session: sessionData });
 
