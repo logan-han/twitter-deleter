@@ -55,6 +55,9 @@ resources:
           ReadCapacityUnits: 10
           WriteCapacityUnits: 10
         TableName: ${self:custom.tableName}
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
 
 custom:
   tableName: 'twitter-deleter'
