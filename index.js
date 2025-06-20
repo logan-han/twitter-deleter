@@ -149,32 +149,60 @@ app.route("/delete-recent").post(async function (req, res, next) {
     let tweets = [];
     let pagination_token = null;
     let count = 0;
+    let totalFetched = 0;
 
-    // Use X API v2 to get user's tweets
+    console.log("Starting to fetch all user tweets...");
+
+    // Use X API v2 to get user's tweets with pagination
     do {
       const params = {
         max_results: 100, // Maximum allowed by API
-        'tweet.fields': 'id,created_at',
-        'user.fields': 'id,username',
-        pagination_token: pagination_token
+        'tweet.fields': ['id', 'created_at', 'text'],
+        'user.fields': ['id', 'username']
       };
+      
+      if (pagination_token) {
+        params.pagination_token = pagination_token;
+      }
+
+      console.log(`Fetching batch ${Math.floor(totalFetched / 100) + 1}, total so far: ${totalFetched}`);
 
       const userTweets = await twitterClient.v2.userTimeline(req.body.user_id, params);
       
       if (userTweets.data) {
         tweets = tweets.concat(userTweets.data);
         count += userTweets.data.length;
+        totalFetched += userTweets.data.length;
+        
+        console.log(`Fetched ${userTweets.data.length} tweets in this batch`);
       }
 
       pagination_token = userTweets.meta?.next_token;
       
-      // Add delay to respect rate limits
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Add delay to respect rate limits (Twitter API v2 has stricter limits)
+      if (pagination_token) {
+        console.log("Waiting to respect rate limits...");
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+      }
       
-    } while (pagination_token && count < 3200); // Twitter's limit for timeline
+      // Safety check to prevent infinite loops (but allow more than 3200)
+      if (totalFetched >= 10000) {
+        console.log("Reached safety limit of 10,000 tweets");
+        break;
+      }
+      
+    } while (pagination_token);
+
+    console.log(`Total tweets fetched: ${totalFetched}`);
+
+    if (tweets.length === 0) {
+      return res.status(404).json({ error: "No tweets found to delete" });
+    }
 
     let id_list = tweets.map(tweet => tweet.id);
     let jobId = Math.random().toString(36).substring(7);
+
+    console.log(`Creating deletion job for ${id_list.length} tweets`);
 
     // Save job details in DynamoDB
     const params = {
@@ -188,12 +216,13 @@ app.route("/delete-recent").post(async function (req, res, next) {
       },
     };
 
-    await dynamoDb.send(new PutCommand(params));
-    res.render("post-upload", { jobId: jobId });
+    await dynamoDb.send(new PutItemCommand(params));
+    res.render("post-upload", { jobId: jobId, tweetCount: count });
     
   } catch (error) {
     console.error("Error in delete-recent:", error);
-    res.status(500).json({ error: "Could not fetch tweets or create job" });
+    console.error("Error details:", error.data || error.message);
+    res.status(500).json({ error: "Could not fetch tweets or create job", details: error.message });
   }
 });
 
@@ -303,75 +332,10 @@ app.route("/callback").get(async function (req, res, next) {
     sessionData.twitterScreenName = userObject.username;
     sessionData.twitterUserId = userObject.id;
 
-    // Get user's latest tweets to find the last tweet ID
-    try {
-      console.log("Fetching tweets for user:", userObject.id);
-      
-      // Try different methods to get user tweets
-      let userTweets;
-      try {
-        // Method 1: userTweets (correct v2 API method)
-        userTweets = await loggedClient.v2.userTweets(userObject.id, {
-          max_results: 5,
-          'tweet.fields': ['id', 'created_at', 'text']
-        });
-      } catch (timelineError) {
-        console.log("userTweets failed, trying userTimeline method:", timelineError.message);
-        // Method 2: userTimeline (fallback)
-        try {
-          userTweets = await loggedClient.v2.userTimeline(userObject.id, {
-            max_results: 5,
-            'tweet.fields': ['id', 'created_at', 'text']
-          });
-        } catch (tweetsError) {
-          console.log("userTimeline method also failed:", tweetsError.message);
-          // Method 3: search recent tweets by user
-          userTweets = await loggedClient.v2.search(`from:${userObject.username}`, {
-            max_results: 5,
-            'tweet.fields': ['id', 'created_at', 'text']
-          });
-        }
-      }
-
-      console.log("API Response:", userTweets);
-      console.log("Tweets data:", userTweets.data);
-      console.log("Number of tweets found:", userTweets.data ? userTweets.data.length : 0);
-
-      if (userTweets.data && userTweets.data.length > 0) {
-        sessionData.lastTweetId = userTweets.data[0].id;
-        sessionData.tweetsCount = userTweets.data.length;
-        
-        console.log("Found tweets, last tweet ID:", sessionData.lastTweetId);
-        
-        // Save updated session
-        await saveSessionData(res, sessionData);
-        
-        res.render("callback", { session: sessionData });
-      } else {
-        console.log("No tweets found in response");
-        // Still proceed but without lastTweetId
-        sessionData.tweetsCount = 0;
-        await saveSessionData(res, sessionData);
-        
-        // Instead of error, show success but indicate no tweets
-        res.render("callback", { 
-          session: sessionData,
-          message: "Authentication successful, but no tweets found. You can still upload a tweet archive."
-        });
-      }
-    } catch (tweetsError) {
-      console.error("Error fetching user tweets:", tweetsError);
-      console.error("Error details:", tweetsError.data || tweetsError.message);
-      
-      // Don't fail the whole auth process, just proceed without tweet data
-      sessionData.tweetsCount = 0;
-      await saveSessionData(res, sessionData);
-      
-      res.render("callback", { 
-        session: sessionData,
-        message: "Authentication successful, but couldn't fetch tweets. You can still upload a tweet archive."
-      });
-    }
+    // Save updated session
+    await saveSessionData(res, sessionData);
+    
+    res.render("callback", { session: sessionData });
 
   } catch (error) {
     console.error("Callback error:", error);
