@@ -493,14 +493,210 @@ app.route("/status/:jobId").get(async function (req, res, next) {
   };
 
   try {
-    const result = await dynamoDb.send(new GetCommand(params));
-    if (result.Item) {
-      res.render("status", { item: result.Item });
-    } else {
-      res.status(404).json({ error: "job not found. maybe completed?" });
+    const result = await dynamoDb.send(new GetItemCommand(params));
+    if (!result.Item) {
+      return res.status(404).json({ error: "Job not found. It may have been completed and cleaned up." });
     }
+
+    const jobData = result.Item;
+    const jobStatus = jobData.status?.S || "normal";
+    const tweetCount = parseInt(jobData.tweet_no?.N || "0");
+    const remainingTweets = jobData.tweet_ids?.L ? jobData.tweet_ids.L.length : 0;
+    const currentTime = Math.floor(Date.now() / 1000);
+    
+    let statusInfo = {
+      jobId: req.params.jobId,
+      status: jobStatus,
+      totalTweets: tweetCount,
+      remainingTweets: remainingTweets,
+      processedTweets: tweetCount - remainingTweets,
+      progress: tweetCount > 0 ? Math.round(((tweetCount - remainingTweets) / tweetCount) * 100) : 0
+    };
+
+    if (jobStatus === "rate_limited") {
+      const resetTime = parseInt(jobData.rate_limit_reset?.N || "0");
+      const timeUntilReset = Math.max(0, resetTime - currentTime);
+      
+      // Get queue position by checking other jobs
+      try {
+        const queueParams = { TableName: config.table_name };
+        const queueResult = await dynamoDb.send(new ScanCommand(queueParams));
+        
+        if (queueResult.Items) {
+          // Filter out session data and get actual jobs
+          const actualJobs = queueResult.Items.filter(item => {
+            const jobId = item.jobId?.S || '';
+            return !jobId.startsWith('session_');
+          });
+          
+          // Sort by creation time to get queue order
+          const sortedJobs = actualJobs.sort((a, b) => {
+            const timeA = parseInt(a.created_at?.N || "0");
+            const timeB = parseInt(b.created_at?.N || "0");
+            return timeA - timeB;
+          });
+          
+          // Find position of current job
+          const currentJobIndex = sortedJobs.findIndex(job => job.jobId.S === req.params.jobId);
+          let queuePosition = 0;
+          
+          if (currentJobIndex !== -1) {
+            // Count jobs ahead that will be processed before this one
+            for (let i = 0; i < currentJobIndex; i++) {
+              const job = sortedJobs[i];
+              const otherJobStatus = job.status?.S || "normal";
+              const otherJobResetTime = parseInt(job.rate_limit_reset?.N || "0");
+              
+              if (otherJobStatus === "normal" || 
+                  (otherJobStatus === "rate_limited" && otherJobResetTime <= resetTime)) {
+                queuePosition++;
+              }
+            }
+          }
+          
+          statusInfo.queuePosition = queuePosition + 1;
+          statusInfo.jobsAhead = queuePosition;
+          
+          // Calculate estimated wait time
+          const rateLimitWaitMinutes = Math.ceil(timeUntilReset / 60);
+          const queueWaitMinutes = queuePosition * 5; // Assume 5 min per job
+          const totalWaitMinutes = Math.max(rateLimitWaitMinutes, queueWaitMinutes);
+          
+          statusInfo.estimatedWaitTime = {
+            minutes: totalWaitMinutes,
+            rateLimitWait: rateLimitWaitMinutes,
+            queueWait: queueWaitMinutes,
+            resetTime: new Date(resetTime * 1000).toISOString()
+          };
+        }
+      } catch (queueError) {
+        console.error("Error getting queue info:", queueError);
+        statusInfo.queuePosition = "unknown";
+      }
+    }
+
+    // Check if requesting JSON or HTML
+    if (req.headers.accept && req.headers.accept.includes('application/json')) {
+      // Return JSON for API calls
+      res.json(statusInfo);
+    } else {
+      // Render status page with enhanced information
+      res.render("status", { 
+        item: jobData,
+        statusInfo: statusInfo,
+        currentTime: new Date().toISOString()
+      });
+    }
+
   } catch (error) {
-    res.status(404).json({ error: "Could not get the job" });
+    console.error("Error getting job status:", error);
+    res.status(500).json({ error: "Could not get the job status" });
+  }
+});
+
+// JSON API endpoint for programmatic access
+app.route("/api/status/:jobId").get(async function (req, res, next) {
+  // Force JSON response by setting accept header
+  req.headers.accept = 'application/json';
+  
+  // Reuse the same logic as the main status endpoint
+  const params = {
+    TableName: config.table_name,
+    Key: {
+      jobId: { S: req.params.jobId },
+    },
+  };
+
+  try {
+    const result = await dynamoDb.send(new GetItemCommand(params));
+    if (!result.Item) {
+      return res.status(404).json({ error: "Job not found. It may have been completed and cleaned up." });
+    }
+
+    const jobData = result.Item;
+    const jobStatus = jobData.status?.S || "normal";
+    const tweetCount = parseInt(jobData.tweet_no?.N || "0");
+    const remainingTweets = jobData.tweet_ids?.L ? jobData.tweet_ids.L.length : 0;
+    const currentTime = Math.floor(Date.now() / 1000);
+    
+    let statusInfo = {
+      jobId: req.params.jobId,
+      status: jobStatus,
+      totalTweets: tweetCount,
+      remainingTweets: remainingTweets,
+      processedTweets: tweetCount - remainingTweets,
+      progress: tweetCount > 0 ? Math.round(((tweetCount - remainingTweets) / tweetCount) * 100) : 0,
+      timestamp: new Date().toISOString()
+    };
+
+    if (jobStatus === "rate_limited") {
+      const resetTime = parseInt(jobData.rate_limit_reset?.N || "0");
+      const timeUntilReset = Math.max(0, resetTime - currentTime);
+      
+      // Get queue position by checking other jobs
+      try {
+        const queueParams = { TableName: config.table_name };
+        const queueResult = await dynamoDb.send(new ScanCommand(queueParams));
+        
+        if (queueResult.Items) {
+          // Filter out session data and get actual jobs
+          const actualJobs = queueResult.Items.filter(item => {
+            const jobId = item.jobId?.S || '';
+            return !jobId.startsWith('session_');
+          });
+          
+          // Sort by creation time to get queue order
+          const sortedJobs = actualJobs.sort((a, b) => {
+            const timeA = parseInt(a.created_at?.N || "0");
+            const timeB = parseInt(b.created_at?.N || "0");
+            return timeA - timeB;
+          });
+          
+          // Find position of current job
+          const currentJobIndex = sortedJobs.findIndex(job => job.jobId.S === req.params.jobId);
+          let queuePosition = 0;
+          
+          if (currentJobIndex !== -1) {
+            // Count jobs ahead that will be processed before this one
+            for (let i = 0; i < currentJobIndex; i++) {
+              const job = sortedJobs[i];
+              const otherJobStatus = job.status?.S || "normal";
+              const otherJobResetTime = parseInt(job.rate_limit_reset?.N || "0");
+              
+              if (otherJobStatus === "normal" || 
+                  (otherJobStatus === "rate_limited" && otherJobResetTime <= resetTime)) {
+                queuePosition++;
+              }
+            }
+          }
+          
+          statusInfo.queuePosition = queuePosition + 1;
+          statusInfo.jobsAhead = queuePosition;
+          
+          // Calculate estimated wait time
+          const rateLimitWaitMinutes = Math.ceil(timeUntilReset / 60);
+          const queueWaitMinutes = queuePosition * 5; // Assume 5 min per job
+          const totalWaitMinutes = Math.max(rateLimitWaitMinutes, queueWaitMinutes);
+          
+          statusInfo.estimatedWaitTime = {
+            minutes: totalWaitMinutes,
+            rateLimitWait: rateLimitWaitMinutes,
+            queueWait: queueWaitMinutes,
+            resetTime: new Date(resetTime * 1000).toISOString(),
+            resetTimestamp: resetTime
+          };
+        }
+      } catch (queueError) {
+        console.error("Error getting queue info:", queueError);
+        statusInfo.queuePosition = "unknown";
+      }
+    }
+
+    res.json(statusInfo);
+
+  } catch (error) {
+    console.error("Error getting job status:", error);
+    res.status(500).json({ error: "Could not get the job status" });
   }
 });
 

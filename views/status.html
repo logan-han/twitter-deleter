@@ -3,18 +3,152 @@
 <head>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css" integrity="sha384-HSMxcRTRxnN+Bdg0JdbxYKrThecOKuH5zCYotlSAcp1+c8xmyTe9GYg1l9a69psu" crossorigin="anonymous">
     <meta charset="UTF-8">
-    <title>Job Status</title>
+    <title>Job Status - <%= statusInfo.jobId %></title>
+    <meta http-equiv="refresh" content="30">
 </head>
 
 <body>
-<h1> Deletion Job in Progress... </h1>
-<!-- TODO - Add automatic refresh & cancel button -->
+<div class="container">
+    <h1>Tweet Deletion Job Status</h1>
+    
+    <div class="panel panel-primary">
+        <div class="panel-heading">
+            <h3 class="panel-title">Job Overview</h3>
+        </div>
+        <div class="panel-body">
+            <table class="table table-striped">
+                <tbody>
+                    <tr>
+                        <td><strong>Job ID</strong></td>
+                        <td><code><%= statusInfo.jobId %></code></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Status</strong></td>
+                        <td>
+                            <% if (statusInfo.status === 'rate_limited') { %>
+                                <span class="label label-warning">Rate Limited</span>
+                            <% } else if (statusInfo.status === 'normal') { %>
+                                <span class="label label-info">Processing</span>
+                            <% } else { %>
+                                <span class="label label-default"><%= statusInfo.status %></span>
+                            <% } %>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Progress</strong></td>
+                        <td>
+                            <div class="progress">
+                                <div class="progress-bar" role="progressbar" style="width: <%- statusInfo.progress %>%;">
+                                    <%- statusInfo.progress %>%
+                                </div>
+                            </div>
+                            <%= statusInfo.processedTweets %> of <%= statusInfo.totalTweets %> tweets processed
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Remaining Tweets</strong></td>
+                        <td><%= statusInfo.remainingTweets %></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 
-<table class="table">
-    <tbody>
-    <tr><td>Job ID</td><td><%= item.jobId %></td>
-    <tr><td>Remaining Item</td><td><%= item.tweet_no %></td>
-    </tbody>
-</table>
+    <% if (statusInfo.status === 'rate_limited' && statusInfo.estimatedWaitTime) { %>
+    <div class="panel panel-warning">
+        <div class="panel-heading">
+            <h3 class="panel-title">Queue Information</h3>
+        </div>
+        <div class="panel-body">
+            <div class="alert alert-info">
+                <strong>Rate Limited by Twitter API</strong><br>
+                Your job is temporarily paused due to Twitter's rate limits.
+            </div>
+            
+            <table class="table table-striped">
+                <tbody>
+                    <tr>
+                        <td><strong>Queue Position</strong></td>
+                        <td>
+                            <% if (statusInfo.jobsAhead === 0) { %>
+                                <span class="label label-success">Next in line</span>
+                            <% } else { %>
+                                #<%= statusInfo.queuePosition %> 
+                                <small class="text-muted">(<%= statusInfo.jobsAhead %> job<%= statusInfo.jobsAhead === 1 ? '' : 's' %> ahead)</small>
+                            <% } %>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Estimated Wait Time</strong></td>
+                        <td>
+                            <% if (statusInfo.estimatedWaitTime.minutes <= 1) { %>
+                                <span class="label label-success">Starting soon</span>
+                            <% } else { %>
+                                <strong><%= statusInfo.estimatedWaitTime.minutes %> minutes</strong>
+                                <% if (statusInfo.estimatedWaitTime.minutes >= 60) { %>
+                                    <small class="text-muted">
+                                        (~<%= Math.floor(statusInfo.estimatedWaitTime.minutes / 60) %>h <%= statusInfo.estimatedWaitTime.minutes % 60 %>m)
+                                    </small>
+                                <% } %>
+                            <% } %>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Rate Limit Reset</strong></td>
+                        <td>
+                            <small class="text-muted">
+                                <%= new Date(statusInfo.estimatedWaitTime.resetTime).toLocaleString() %>
+                            </small>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="alert alert-warning">
+                <small>
+                    <strong>Note:</strong> Times are estimates. Your job will start automatically when rate limits reset and it's your turn in the queue.
+                </small>
+            </div>
+        </div>
+    </div>
+    <% } %>
+
+    <% if (statusInfo.status === 'normal') { %>
+    <div class="panel panel-info">
+        <div class="panel-heading">
+            <h3 class="panel-title">Processing</h3>
+        </div>
+        <div class="panel-body">
+            <div class="alert alert-info">
+                <strong>Your job is currently being processed!</strong><br>
+                Tweets are being deleted in batches to respect Twitter's rate limits.
+            </div>
+        </div>
+    </div>
+    <% } %>
+
+    <div class="panel panel-default">
+        <div class="panel-heading">
+            <h3 class="panel-title">Actions</h3>
+        </div>
+        <div class="panel-body">
+            <button class="btn btn-primary" onclick="location.reload()">
+                <span class="glyphicon glyphicon-refresh"></span> Refresh Status
+            </button>
+            <a href="/" class="btn btn-default">
+                <span class="glyphicon glyphicon-home"></span> Back to Home
+            </a>
+        </div>
+    </div>
+
+    <div class="panel panel-default">
+        <div class="panel-body">
+            <small class="text-muted">
+                Last updated: <%= new Date(currentTime).toLocaleString() %> | 
+                This page refreshes automatically every 30 seconds
+            </small>
+        </div>
+    </div>
+</div>
 </body>
 </html>
