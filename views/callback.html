@@ -10,23 +10,23 @@
 <h1> Hello, <%= session.twitterScreenName %> </h1>
 <H3>To delete your older than 3,200 recent tweets, please follow below steps:</H3>
 <ol>
-    <li><a href="https://twitter.com/settings/download_your_data">Get your Twitter archive zip</a></li>
+    <li><a href="https://x.com/settings/download_your_data">Get your X (Twitter) archive zip</a></li>
     <li>Unzip and find data\tweet.js then zip the file</li>
-    <li>upload ZIP compressed tweet.js file from your Twitter archive file below</li>
+    <li>upload ZIP compressed tweet.js file from your X archive file below</li>
 </ol>
 <form class="form-inline" method="post" action="upload" enctype="multipart/form-data">
     <div class="form-group">
         <input type="file" name="fileUploaded">
         <span class="help-block">Max 10MB & 20,000 tweets</span>
-        <input type="hidden" name="token" value="<%= session.token %>">
-        <input type="hidden" name="secret" value="<%= session.secret %>">
+        <input type="hidden" name="token" value="<%= session.accessToken %>">
+        <input type="hidden" name="refresh_token" value="<%= session.refreshToken %>">
     </div>
     <button type="submit" class="btn btn-default">Upload</button>
 </form>
 <h3>Or, just delete your recent 3,200 tweets:</h3>
 <form class="form-inline" method="post" action="delete-recent">
-    <input type="hidden" name="token" value="<%= session.token %>">
-    <input type="hidden" name="secret" value="<%= session.secret %>">
+    <input type="hidden" name="token" value="<%= session.accessToken %>">
+    <input type="hidden" name="refresh_token" value="<%= session.refreshToken %>">
     <input type="hidden" name="user_id" value="<%= session.twitterUserId %>">
     <input type="hidden" name="last_tweet_id" value="<%= session.lastTweetId %>">
     <button type="submit" class="btn btn-primary">Delete Recent Tweets Only</button>

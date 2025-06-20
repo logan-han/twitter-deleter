@@ -1,8 +1,10 @@
 const config = require("./config.js");
 const { DynamoDBClient, ScanCommand, DeleteCommand, UpdateCommand } = require("@aws-sdk/client-dynamodb");
-const OAuth = require("oauth");
+const { TwitterApi } = require("twitter-api-v2");
+const RateLimiter = require("./rate-limiter.js");
 
 const dynamoDb = new DynamoDBClient({ region: config.aws_region });
+const rateLimiter = new RateLimiter();
 
 exports.handler = async function (event, context) {
   const params = {
@@ -15,9 +17,14 @@ exports.handler = async function (event, context) {
     if (result.Items[0]) {
       const jobId = result.Items[0].jobId.S;
       let tweet_ids = result.Items[0].tweet_ids.L.map(id => id.S);
-      const to_delete_list = tweet_ids.splice(0, config.delete_per_run);
       const twitter_token = result.Items[0].token.S;
-      const twitter_secret = result.Items[0].secret.S;
+      const twitter_refresh_token = result.Items[0].refresh_token?.S;
+
+      // Calculate how many tweets we can delete based on rate limits
+      const maxBatchSize = rateLimiter.getMaxBatchSize();
+      const to_delete_list = tweet_ids.splice(0, Math.min(maxBatchSize, config.delete_per_run));
+
+      console.log(`Processing ${to_delete_list.length} tweets for deletion. ${tweet_ids.length} remaining.`);
 
       if (tweet_ids.length === 0) {
         const deleteParams = {
@@ -40,30 +47,38 @@ exports.handler = async function (event, context) {
         console.log("Item Updated - " + jobId + ":" + tweet_ids.length);
       }
 
-      var oauth = new OAuth.OAuth(
-        "https://api.twitter.com/oauth/request_token",
-        "https://api.twitter.com/oauth/access_token",
-        config.consumer_key,
-        config.consumer_secret,
-        "1.0A",
-        null,
-        "HMAC-SHA1"
-      );
+      // Initialize Twitter API v2 client
+      const twitterClient = new TwitterApi({
+        clientId: config.consumer_key,
+        clientSecret: config.consumer_secret,
+      });
 
+      // Use access token for authenticated requests
+      const userClient = new TwitterApi(twitter_token);
+
+      // Delete tweets with proper rate limiting
       for (let i = 0; i < to_delete_list.length; i++) {
-        oauth.post(
-          "https://api.twitter.com/1.1/statuses/destroy/" +
-            to_delete_list[i] +
-            ".json",
-          twitter_token,
-          twitter_secret,
-          {},
-          function (error, data, response) {
-            if (error) {
-              console.log(error);
-            }
+        if (!rateLimiter.canMakeDeleteRequest()) {
+          const waitTime = rateLimiter.getTimeUntilNextRequest();
+          if (waitTime > 0) {
+            console.log(`Rate limit reached. Waiting ${Math.ceil(waitTime / 1000)} seconds.`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
           }
-        );
+        }
+
+        try {
+          rateLimiter.recordDeleteRequest();
+          await userClient.v2.deleteTweet(to_delete_list[i]);
+          console.log(`Successfully deleted tweet: ${to_delete_list[i]}`);
+          
+          // Add a small delay between requests to be respectful
+          if (i < to_delete_list.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        } catch (error) {
+          console.error(`Error deleting tweet ${to_delete_list[i]}:`, error);
+          // Continue with other tweets even if one fails
+        }
       }
     }
   } catch (error) {
