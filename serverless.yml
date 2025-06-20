@@ -5,9 +5,8 @@ provider:
   runtime: nodejs18.x
   region: ap-southeast-2
   versionFunctions: false
-  apiGateway:
-    binaryMediaTypes:
-      - "*/*"
+  httpApi:
+    cors: true
   iamRoleStatements:
     - Effect: Allow
       Action:
@@ -32,11 +31,11 @@ functions:
     memorySize: 512
     timeout: 60
     events:
-      - http:
+      - httpApi:
           path: /
           method: ANY
-      - http:
-          path: /{any+}
+      - httpApi:
+          path: /{proxy+}
           method: ANY
 
 resources:
