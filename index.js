@@ -1,4 +1,5 @@
 const config = require("./config.js");
+const path = require("path");
 const serverless = require("serverless-http");
 const express = require("express");
 const RateLimit = require("express-rate-limit");
@@ -510,7 +511,10 @@ app
           try {
             await dynamoDb.send(new PutItemCommand(params));
             res.redirect(`/status/${req.file.filename}`);
-            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+            const normalizedPath = path.resolve(req.file.path);
+            if (normalizedPath.startsWith("/tmp/") && fs.existsSync(normalizedPath)) {
+              fs.unlinkSync(normalizedPath);
+            }
           } catch (error) {
             res.status(500).json({ error: "Could not create the job" });
           }
