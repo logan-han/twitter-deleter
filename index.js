@@ -1,6 +1,7 @@
 const config = require("./config.js");
 const serverless = require("serverless-http");
 const express = require("express");
+const RateLimit = require("express-rate-limit");
 const { DynamoDBClient, PutItemCommand, GetItemCommand, ScanCommand } = require("@aws-sdk/client-dynamodb");
 const { TwitterApi } = require("twitter-api-v2");
 const crypto = require("crypto");
@@ -368,7 +369,12 @@ app.route("/delete-recent").post(async function (req, res, next) {
   }
 });
 
-app.route("/callback").get(async function (req, res, next) {
+const callbackLimiter = RateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // max 100 requests per windowMs
+});
+
+app.route("/callback").get(callbackLimiter, async function (req, res, next) {
   try {
     const { code, state, error } = req.query;
     
