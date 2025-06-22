@@ -1,4 +1,6 @@
 name: Test
+permissions:
+  contents: read
 env:
   AWS_DEFAULT_REGION: "ap-southeast-2"
 on: [push]
