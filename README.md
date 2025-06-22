@@ -5,11 +5,9 @@ Delete your X (Twitter) Tweet
 ## Background
 
 I created this mini project to address Twitter not supporting bulk deletion issue. 
-Back then even there's an issue with timeline API can't return older than 3,200 tweets hence added archive file support to cover older and/or bigger number of tweets. 
-
 Then since Elon took over the platform, now more of the issue is heavily restricted API for free users.
 
-I've revampted this project but it may still have issues. 
+I've revampted this project but it may still have issues as I can't test it fully without paying hefty $. 
 
 ## X API v2 Updates & Rate Limits
 
@@ -28,3 +26,5 @@ The backend batch process picks it up and runs batch API calls for tweet removal
 ## Test
 
 https://twitter.han.life
+
+If you're expecting a free online tool, this demo isn't probably for you since there's maximum retrieval cap 1,500 posts per month now.

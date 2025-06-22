@@ -58,7 +58,7 @@ exports.handler = async function (event, context) {
       return timeA - timeB;
     });
     
-    console.log(`Found ${sortedJobs.length} actual jobs in queue (filtered out session data)`);
+    console.log(`Found ${sortedJobs.length} actual jobs in queue`);
     
     // Log all jobs for debugging
     sortedJobs.forEach((job, index) => {
