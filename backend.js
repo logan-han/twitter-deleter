@@ -6,6 +6,112 @@ const RateLimiter = require("./rate-limiter.js");
 const dynamoDb = new DynamoDBClient({ region: config.aws_region });
 const rateLimiter = new RateLimiter();
 
+// Function to check if error is monthly usage cap exceeded
+function isMonthlyCapExceeded(error) {
+  return error.code === 429 && 
+         error.data && 
+         error.data.title === "UsageCapExceeded" && 
+         error.data.period === "Monthly" && 
+         error.data.scope === "Product";
+}
+
+// Function to mark all jobs as monthly cap suspended
+async function suspendAllJobsForMonthlyCapReached() {
+  console.log("Monthly usage cap reached. Suspending all jobs until next month.");
+  
+  try {
+    const scanParams = { TableName: config.table_name };
+    const allJobs = await dynamoDb.send(new ScanCommand(scanParams));
+    
+    if (allJobs.Items && allJobs.Items.length > 0) {
+      // Filter out session data
+      const jobItems = allJobs.Items.filter(item => {
+        const jobId = item.jobId?.S || '';
+        return !jobId.startsWith('session_');
+      });
+      
+      // Calculate when next month starts (first day of next month at 00:00 UTC)
+      const now = new Date();
+      const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+      const nextMonthTimestamp = Math.floor(nextMonth.getTime() / 1000);
+      
+      console.log(`Suspending ${jobItems.length} jobs until ${nextMonth.toISOString()}`);
+      
+      // Update all jobs to monthly_cap_suspended status
+      for (const job of jobItems) {
+        const jobId = job.jobId.S;
+        const updateParams = {
+          TableName: config.table_name,
+          Key: { jobId: { S: jobId } },
+          UpdateExpression: "set #status = :status, monthly_cap_reset = :reset",
+          ExpressionAttributeNames: {
+            "#status": "status"
+          },
+          ExpressionAttributeValues: {
+            ":status": { S: "monthly_cap_suspended" },
+            ":reset": { N: nextMonthTimestamp.toString() }
+          },
+        };
+        
+        try {
+          await dynamoDb.send(new UpdateItemCommand(updateParams));
+          console.log(`Suspended job ${jobId} due to monthly cap`);
+        } catch (updateError) {
+          console.error(`Error suspending job ${jobId}:`, updateError);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error suspending jobs for monthly cap:", error);
+  }
+}
+
+// Function to check if any jobs need to be reactivated after monthly cap reset
+async function checkForMonthlyCapReset() {
+  const currentTime = Math.floor(Date.now() / 1000);
+  
+  try {
+    const scanParams = { TableName: config.table_name };
+    const allJobs = await dynamoDb.send(new ScanCommand(scanParams));
+    
+    if (allJobs.Items && allJobs.Items.length > 0) {
+      const suspendedJobs = allJobs.Items.filter(item => {
+        const status = item.status?.S;
+        const resetTime = item.monthly_cap_reset?.N ? parseInt(item.monthly_cap_reset.N) : null;
+        return status === "monthly_cap_suspended" && resetTime && currentTime >= resetTime;
+      });
+      
+      if (suspendedJobs.length > 0) {
+        console.log(`Monthly cap has reset. Reactivating ${suspendedJobs.length} suspended jobs.`);
+        
+        for (const job of suspendedJobs) {
+          const jobId = job.jobId.S;
+          const updateParams = {
+            TableName: config.table_name,
+            Key: { jobId: { S: jobId } },
+            UpdateExpression: "set #status = :status REMOVE monthly_cap_reset",
+            ExpressionAttributeNames: {
+              "#status": "status"
+            },
+            ExpressionAttributeValues: {
+              ":status": { S: "normal" }
+            },
+          };
+          
+          try {
+            await dynamoDb.send(new UpdateItemCommand(updateParams));
+            console.log(`Reactivated job ${jobId} after monthly cap reset`);
+          } catch (updateError) {
+            console.error(`Error reactivating job ${jobId}:`, updateError);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error checking for monthly cap reset:", error);
+  }
+}
+
 // Function to refresh Twitter access token
 async function refreshTwitterToken(refreshToken) {
   try {
@@ -28,7 +134,10 @@ async function refreshTwitterToken(refreshToken) {
 }
 
 exports.handler = async function (event, context) {
-  // First, get all jobs and process them in order (oldest first)
+  // First check if monthly cap has reset and reactivate jobs if needed
+  await checkForMonthlyCapReset();
+  
+  // Get all jobs and process them in order (oldest first)
   const params = {
     TableName: config.table_name,
   };
@@ -49,6 +158,17 @@ exports.handler = async function (event, context) {
     if (jobItems.length === 0) {
       console.log("No actual jobs in queue (only session data found)");
       return;
+    }
+    
+    // Check if any jobs are suspended due to monthly cap
+    const monthlySuspendedJobs = jobItems.filter(item => item.status?.S === "monthly_cap_suspended");
+    if (monthlySuspendedJobs.length > 0) {
+      const resetTime = monthlySuspendedJobs[0].monthly_cap_reset?.N ? parseInt(monthlySuspendedJobs[0].monthly_cap_reset.N) : null;
+      if (resetTime) {
+        const resetDate = new Date(resetTime * 1000);
+        console.log(`Monthly usage cap exceeded. ${monthlySuspendedJobs.length} jobs suspended until ${resetDate.toISOString()}`);
+        return; // Don't process any jobs
+      }
     }
     
     // Sort jobs by creation time (oldest first) to maintain queue order
@@ -91,10 +211,11 @@ exports.handler = async function (event, context) {
         }
         // If rate limit hasn't expired, continue to next job
       }
+      // Skip monthly_cap_suspended jobs
     }
     
     if (!jobToProcess) {
-      console.log("No jobs ready to process (all are rate-limited)");
+      console.log("No jobs ready to process (all are rate-limited or suspended)");
       return;
     }
     
@@ -188,7 +309,12 @@ exports.handler = async function (event, context) {
       } catch (fetchError) {
         console.error(`Error fetching tweets for rate-limited job ${jobId}:`, fetchError);
         
-        if (fetchError.code === 429 && fetchError.rateLimit) {
+        // Check if this is a monthly usage cap error
+        if (isMonthlyCapExceeded(fetchError)) {
+          console.log(`Monthly usage cap exceeded while fetching tweets for job ${jobId}`);
+          await suspendAllJobsForMonthlyCapReached();
+          return; // Stop all processing
+        } else if (fetchError.code === 429 && fetchError.rateLimit) {
           // Still rate limited, update reset time with a buffer
           const newReset = fetchError.rateLimit.reset + 60; // Add 1 minute buffer
           console.log(`Still rate limited. New reset time: ${newReset}, Current: ${currentTime}`);
@@ -316,7 +442,26 @@ exports.handler = async function (event, context) {
       } catch (error) {
         console.error(`Error deleting tweet ${to_delete_list[i]}:`, error);
         
-        if (error.code === 429 && error.rateLimit) {
+        // Check if this is a monthly usage cap error
+        if (isMonthlyCapExceeded(error)) {
+          console.log(`Monthly usage cap exceeded during deletion of tweet ${to_delete_list[i]}`);
+          
+          // Save remaining tweets first
+          const remainingTweets = to_delete_list.slice(i).concat(tweet_ids);
+          const updateParams = {
+            TableName: config.table_name,
+            Key: { jobId: { S: jobId } },
+            UpdateExpression: "set tweet_ids = :t",
+            ExpressionAttributeValues: {
+              ":t": { L: remainingTweets.map(id => ({ S: id })) }
+            },
+          };
+          await dynamoDb.send(new UpdateItemCommand(updateParams));
+          
+          // Then suspend all jobs including this one
+          await suspendAllJobsForMonthlyCapReached();
+          return; // Stop all processing
+        } else if (error.code === 429 && error.rateLimit) {
           // Rate limit hit during deletion, save remaining tweets and mark as rate limited
           console.log(`Rate limit hit during deletion. Saving remaining ${tweet_ids.length + to_delete_list.length - i - 1} tweets`);
           
@@ -392,4 +537,10 @@ exports.handler = async function (event, context) {
   } catch (error) {
     console.error("Unable to process jobs:", error);
   }
+};
+
+// Export for testing
+module.exports = { 
+  handler: exports.handler,
+  isMonthlyCapExceeded 
 };

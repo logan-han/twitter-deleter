@@ -93,13 +93,13 @@ function calculateQueuePosition(allJobs, currentJobId) {
     return { queuePosition: 1, jobsAhead: 0 };
   }
   
-  // Count jobs ahead that are still active (not completed)
+  // Count jobs ahead that are still active (not completed and not monthly suspended)
   let jobsAhead = 0;
   for (let i = 0; i < currentJobIndex; i++) {
     const job = sortedJobs[i];
     const jobStatus = job.status?.S || "normal";
     
-    // Count jobs that still exist and are not completed
+    // Count jobs that still exist and are not completed or suspended
     if (jobStatus === "normal" || jobStatus === "rate_limited") {
       jobsAhead++;
     }
@@ -230,8 +230,40 @@ app.route("/delete-recent").post(async function (req, res, next) {
     console.error("Error in delete-recent:", error);
     console.error("Error details:", error.data || error.message);
     
-    // Handle rate limiting (429 error)
-    if (error.code === 429 && error.rateLimit) {
+    // Check if this is a monthly usage cap error
+    if (error.code === 429 && error.data && error.data.title === "UsageCapExceeded" && error.data.period === "Monthly") {
+      console.log("Monthly usage cap exceeded during initial tweet fetch");
+      
+      // Calculate when next month starts
+      const now = new Date();
+      const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+      const nextMonthTimestamp = Math.floor(nextMonth.getTime() / 1000);
+      
+      // Create a suspended job 
+      let jobId = Math.random().toString(36).substring(7);
+      const params = {
+        TableName: config.table_name,
+        Item: {
+          jobId: { S: jobId },
+          token: { S: req.body.token },
+          refresh_token: { S: req.body.refresh_token || '' },
+          user_id: { S: req.body.user_id },
+          status: { S: "monthly_cap_suspended" },
+          monthly_cap_reset: { N: nextMonthTimestamp.toString() },
+          tweet_no: { N: "0" },
+          tweet_ids: { L: [] },
+          created_at: { N: Math.floor(Date.now() / 1000).toString() }
+        },
+      };
+      
+      try {
+        await dynamoDb.send(new PutItemCommand(params));
+        res.redirect(`/status/${jobId}`);
+      } catch (dbError) {
+        console.error("Error saving monthly cap suspended job:", dbError);
+        res.status(500).json({ error: "Could not save job for retry after monthly cap reset" });
+      }
+    } else if (error.code === 429 && error.rateLimit) {
       console.log("Rate limited. Reset time:", error.rateLimit.reset);
       
       // Check how many jobs are already in the queue and calculate proper position
@@ -251,7 +283,9 @@ app.route("/delete-recent").post(async function (req, res, next) {
           // Filter out session data - only count actual jobs
           const actualJobs = queueResult.Items.filter(item => {
             const jobId = item.jobId?.S || '';
-            return !jobId.startsWith('session_');
+            const status = item.status?.S || 'normal';
+            // Don't count monthly suspended jobs in the queue
+            return !jobId.startsWith('session_') && status !== 'monthly_cap_suspended';
           });
           
           // Simple queue position: count jobs created before this one
@@ -505,7 +539,17 @@ app.route("/status/:jobId").get(async function (req, res, next) {
       progress: tweetCount > 0 ? Math.round(((tweetCount - remainingTweets) / tweetCount) * 100) : 0
     };
 
-    if (jobStatus === "rate_limited") {
+    if (jobStatus === "monthly_cap_suspended") {
+      const resetTime = parseInt(jobData.monthly_cap_reset?.N || "0");
+      const timeUntilReset = Math.max(0, resetTime - currentTime);
+      
+      statusInfo.monthlyCapReset = {
+        resetTime: new Date(resetTime * 1000).toISOString(),
+        resetTimestamp: resetTime,
+        timeUntilReset: timeUntilReset,
+        daysUntilReset: Math.ceil(timeUntilReset / (24 * 60 * 60))
+      };
+    } else if (jobStatus === "rate_limited") {
       const resetTime = parseInt(jobData.rate_limit_reset?.N || "0");
       const timeUntilReset = Math.max(0, resetTime - currentTime);
       
@@ -593,7 +637,17 @@ app.route("/api/status/:jobId").get(async function (req, res, next) {
       timestamp: new Date().toISOString()
     };
 
-    if (jobStatus === "rate_limited") {
+    if (jobStatus === "monthly_cap_suspended") {
+      const resetTime = parseInt(jobData.monthly_cap_reset?.N || "0");
+      const timeUntilReset = Math.max(0, resetTime - currentTime);
+      
+      statusInfo.monthlyCapReset = {
+        resetTime: new Date(resetTime * 1000).toISOString(),
+        resetTimestamp: resetTime,
+        timeUntilReset: timeUntilReset,
+        daysUntilReset: Math.ceil(timeUntilReset / (24 * 60 * 60))
+      };
+    } else if (jobStatus === "rate_limited") {
       const resetTime = parseInt(jobData.rate_limit_reset?.N || "0");
       const timeUntilReset = Math.max(0, resetTime - currentTime);
       
