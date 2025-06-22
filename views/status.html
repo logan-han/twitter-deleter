@@ -27,6 +27,8 @@
                         <td>
                             <% if (statusInfo.status === 'rate_limited') { %>
                                 <span class="label label-warning">Rate Limited</span>
+                            <% } else if (statusInfo.status === 'monthly_cap_suspended') { %>
+                                <span class="label label-danger">Monthly Cap Exceeded</span>
                             <% } else if (statusInfo.status === 'normal') { %>
                                 <span class="label label-info">Processing</span>
                             <% } else { %>
@@ -53,6 +55,53 @@
             </table>
         </div>
     </div>
+
+    <% if (statusInfo.status === 'monthly_cap_suspended' && statusInfo.monthlyCapReset) { %>
+    <div class="panel panel-danger">
+        <div class="panel-heading">
+            <h3 class="panel-title">Monthly Usage Cap Exceeded</h3>
+        </div>
+        <div class="panel-body">
+            <div class="alert alert-warning">
+                <strong>Twitter Monthly API Limit Reached</strong><br>
+                Your job has been suspended because the monthly Twitter API usage limit has been exceeded.
+                Processing will resume automatically next month.
+            </div>
+            
+            <table class="table table-striped">
+                <tbody>
+                    <tr>
+                        <td><strong>Resume Date</strong></td>
+                        <td>
+                            <strong><%= new Date(statusInfo.monthlyCapReset.resetTime).toLocaleDateString() %></strong>
+                            <small class="text-muted">
+                                at <%= new Date(statusInfo.monthlyCapReset.resetTime).toLocaleTimeString() %>
+                            </small>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Days Remaining</strong></td>
+                        <td>
+                            <% if (statusInfo.monthlyCapReset.daysUntilReset <= 1) { %>
+                                <span class="label label-success">Resumes tomorrow</span>
+                            <% } else { %>
+                                <span class="label label-warning"><%= statusInfo.monthlyCapReset.daysUntilReset %> days</span>
+                            <% } %>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="alert alert-info">
+                <small>
+                    <strong>What happened?</strong> Twitter limits the total number of API requests per month for all users.
+                    When this limit is reached, all processing stops until the first day of the next month.
+                    Your job will automatically resume processing once the monthly limit resets.
+                </small>
+            </div>
+        </div>
+    </div>
+    <% } %>
 
     <% if (statusInfo.status === 'rate_limited' && statusInfo.estimatedWaitTime) { %>
     <div class="panel panel-warning">
