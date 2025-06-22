@@ -23,7 +23,11 @@ app.use(parser.body.urlencoded({ extended: false }));
 app.use(parser.cookie());
 app.engine("html", require("ejs").renderFile);
 app.set("view engine", "html");
-app.listen(config.port);
+
+// Only start the server if not in test environment
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(config.local_port);
+}
 
 // Simple state-based session handling (no DynamoDB needed for sessions)
 function generateState() {
@@ -51,9 +55,12 @@ function decodeStateData(stateParam) {
 
 app.use(
   parser.session({
-    secret: config.consumer_secret,
+    secret: config.consumer_secret || 'test-secret-for-testing',
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: false, // Changed to false to avoid creating sessions for every request
+    cookie: {
+      maxAge: process.env.NODE_ENV === 'test' ? 60000 : 24 * 60 * 60 * 1000 // 1 minute in test, 1 day in prod
+    }
   })
 );
 

@@ -4,9 +4,9 @@
   "description": "Delete tweets for free",
   "main": "index.js",
   "scripts": {
-    "test": "node_modules/.bin/jest --forceExit --verbose",
-    "test:watch": "node_modules/.bin/jest --watch",
-    "test:coverage": "node_modules/.bin/jest --coverage --forceExit",
+    "test": "NODE_ENV=test node_modules/.bin/jest --forceExit --verbose",
+    "test:watch": "NODE_ENV=test node_modules/.bin/jest --watch",
+    "test:coverage": "NODE_ENV=test node_modules/.bin/jest --coverage --forceExit",
     "format": "node_modules/.bin/prettier --write '**/*.{js,css,json,md}'"
   },
   "author": "Logan Han <logan@han.life>",
@@ -43,11 +43,14 @@
     "collectCoverageFrom": [
       "*.js",
       "!coverage/**",
-      "!node_modules/**"
+      "!node_modules/**",
+      "!tests/setup.js"
     ],
     "testMatch": [
-      "**/tests/**/*.js"
+      "**/tests/**/*.test.js"
     ],
-    "testTimeout": 10000
+    "testTimeout": 10000,
+    "silent": false,
+    "setupFilesAfterEnv": ["<rootDir>/tests/setup.js"]
   }
 }
