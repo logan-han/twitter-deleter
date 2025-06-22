@@ -1,8 +1,8 @@
 var config = {
   local_port: 3000,
   aws_region: "ap-southeast-2",
-  consumer_key: "CONSUMER_KEY", // OAuth 2.0 Client ID
-  consumer_secret: "CONSUMER_SECRET", // OAuth 2.0 Client Secret
+  consumer_key: process.env.CONSUMER_KEY, // OAuth 2.0 Client ID
+  consumer_secret: process.env.CONSUMER_SECRET, // OAuth 2.0 Client Secret
   callback_url: "https://twitter.han.life/callback",
   delete_per_run: 10, // Reduced from 100 to respect rate limits
   table_name: "twitter-deleter",

@@ -21,14 +21,6 @@ jobs:
     - name: Install Serverless Framework
       run: npm install -g serverless
 
-    - name: Inject Secrets
-      env :
-        CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
-        CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
-      run : |
-        sed -i "s/CONSUMER_KEY/$CONSUMER_KEY/g" config.js
-        sed -i "s/CONSUMER_SECRET/$CONSUMER_SECRET/g" config.js
-
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -42,4 +34,6 @@ jobs:
     - name: Deploy Lambda functions
       env :
         SERVERLESS_ACCESS_KEY: ${{ secrets.SERVERLESS_ACCESS_KEY }}
+        CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
+        CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
       run : sls deploy

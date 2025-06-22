@@ -2,11 +2,14 @@ service: twitter-deleter
 
 provider:
   name: aws
-  runtime: nodejs18.x
+  runtime: nodejs20.x
   region: ap-southeast-2
   versionFunctions: false
   httpApi:
     cors: true
+  environment:
+    CONSUMER_KEY: ${env:CONSUMER_KEY}
+    CONSUMER_SECRET: ${env:CONSUMER_SECRET}
   iamRoleStatements:
     - Effect: Allow
       Action:
