@@ -30,6 +30,14 @@ jest.mock("twitter-api-v2", () => ({
   TwitterApi: jest.fn(() => mockTwitterClient),
 }));
 
+// Mock express-session to avoid hanging
+jest.mock("express-session", () => {
+  return () => (req, res, next) => {
+    req.session = {};
+    next();
+  };
+});
+
 const app = require("../index");
 const request = supertest(app);
 
