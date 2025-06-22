@@ -1,4 +1,7 @@
 name: Build and Deploy
+permissions:
+  contents: read
+  secrets: read
 env:
   AWS_DEFAULT_REGION: "ap-southeast-2"
 on:
