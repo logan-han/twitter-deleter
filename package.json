@@ -11,7 +11,7 @@
   },
   "author": "Logan Han <logan@han.life>",
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.666.0",
+    "@aws-sdk/client-dynamodb": "^3.835.0",
     "adm-zip": "^0.5.10",
     "async": "^0.9.2",
     "aws-sdk": "^2.1331.0",
