@@ -17,15 +17,13 @@ module.exports = {
   callback_url: "https://twitter.han.life/callback",
   delete_per_run: 10, // Reduced from 100 to respect rate limits
   table_name: "twitter-deleter",
-  // X API v2 Rate Limits
+  // X API v2 Rate Limits (only for deletion, no longer need retrieval limits)
   rate_limit: {
     delete_per_15_min: 50,
-    delete_per_3_hours: 300,
-    requests_per_15_min: 50,
-    requests_per_3_hours: 300
+    delete_per_3_hours: 300
   },
-  // OAuth 2.0 settings
+  // OAuth 2.0 settings (removed tweet.read since we no longer retrieve tweets via API)
   oauth2: {
-    scope: "tweet.read tweet.write users.read offline.access"
+    scope: "tweet.write users.read offline.access"
   }
 };

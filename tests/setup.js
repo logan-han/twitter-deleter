@@ -13,7 +13,6 @@ if (process.env.JEST_SILENT !== 'false') {
     if (typeof message === 'string' && 
         (message.includes('Error decoding state data') || 
          message.includes('Twitter OAuth error') ||
-         message.includes('Error in delete-recent') ||
          message.includes('Error details:'))) {
       // These are expected test errors, suppress them
       return;

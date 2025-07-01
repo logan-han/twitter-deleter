@@ -9,7 +9,6 @@ const mockDynamoDbClient = {
 // Mock Twitter API
 const mockTwitterClient = {
   v2: {
-    userTimeline: jest.fn(),
     me: jest.fn(),
   },
   loginWithOAuth2: jest.fn(),
@@ -46,7 +45,6 @@ describe("Route Checks", () => {
     jest.clearAllMocks();
     // Reset mock implementations
     mockDynamoDbClient.send.mockReset();
-    mockTwitterClient.v2.userTimeline.mockReset();
     mockTwitterClient.v2.me.mockReset();
     mockTwitterClient.loginWithOAuth2.mockReset();
     mockTwitterClient.refreshOAuth2Token.mockReset();
@@ -232,107 +230,6 @@ describe("Route Checks", () => {
           // but currently failing due to state validation issues
           // For now, let's check that it doesn't return a 500 error
           res.status.should.not.equal(500);
-          done();
-        });
-    });
-  });
-
-  describe("POST /delete-recent", () => {
-    it("should return 500 for invalid token", (done) => {
-      // Mock Twitter API to throw authentication error
-      mockTwitterClient.v2.userTimeline.mockRejectedValue({
-        code: 401,
-        data: { title: "Unauthorized", status: 401, detail: "Unauthorized" }
-      });
-      
-      request
-        .post("/delete-recent")
-        .type("form")
-        .send({
-          token: "invalid_token",
-          user_id: "123456789"
-        })
-        .end((err, res) => {
-          if (err) done(err);
-          res.status.should.equal(500);
-          done();
-        });
-    });
-
-    it("should handle rate limiting", (done) => {
-      // Mock Twitter API to return rate limit error
-      const rateLimitError = {
-        code: 429,
-        rateLimit: {
-          reset: Math.floor(Date.now() / 1000) + 900, // 15 minutes from now
-          remaining: 0,
-          limit: 50
-        },
-        data: { title: "Too Many Requests", status: 429 }
-      };
-      
-      mockTwitterClient.v2.userTimeline.mockRejectedValue(rateLimitError);
-      mockDynamoDbClient.send.mockResolvedValue({ Items: [] });
-      
-      request
-        .post("/delete-recent")
-        .type("form")
-        .send({
-          token: "valid_token",
-          user_id: "123456789"
-        })
-        .end((err, res) => {
-          if (err) done(err);
-          res.status.should.equal(302); // Redirect to status page
-          done();
-        });
-    });
-
-    it("should successfully create job with tweets", (done) => {
-      // Mock Twitter API to return tweets
-      const mockTweets = [
-        { id: "1", created_at: "2023-01-01T00:00:00Z", text: "Tweet 1" },
-        { id: "2", created_at: "2023-01-02T00:00:00Z", text: "Tweet 2" }
-      ];
-      
-      mockTwitterClient.v2.userTimeline.mockResolvedValue({
-        data: mockTweets,
-        meta: { next_token: null }
-      });
-      
-      mockDynamoDbClient.send.mockResolvedValue({});
-      
-      request
-        .post("/delete-recent")
-        .type("form")
-        .send({
-          token: "valid_token",
-          user_id: "123456789"
-        })
-        .end((err, res) => {
-          if (err) done(err);
-          res.status.should.equal(302); // Redirect to status page
-          done();
-        });
-    });
-
-    it("should return 404 when no tweets found", (done) => {
-      // Mock Twitter API to return no tweets
-      mockTwitterClient.v2.userTimeline.mockResolvedValue({
-        data: null,
-        meta: { next_token: null }
-      });
-      
-      request
-        .post("/delete-recent")
-        .type("form")
-        .send({
-          token: "valid_token",
-          user_id: "123456789"
-        })
-        .end((err, res) => {
-          if (err) done(err);
-          res.status.should.equal(404);
           done();
         });
     });

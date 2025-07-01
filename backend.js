@@ -201,21 +201,12 @@ exports.handler = async function (event, context) {
         // Normal jobs can always be processed
         jobToProcess = job;
         break;
-      } else if (status === "rate_limited") {
-        const rateLimitReset = parseInt(job.rate_limit_reset.N);
-        // Add a 30-second buffer to ensure rate limit has truly expired
-        if (currentTime >= rateLimitReset + 30) {
-          // Rate limit has expired with buffer, this job can be processed
-          jobToProcess = job;
-          break;
-        }
-        // If rate limit hasn't expired, continue to next job
       }
-      // Skip monthly_cap_suspended jobs
+      // Skip rate_limited and monthly_cap_suspended jobs (these should not exist anymore)
     }
     
     if (!jobToProcess) {
-      console.log("No jobs ready to process (all are rate-limited or suspended)");
+      console.log("No jobs ready to process");
       return;
     }
     
@@ -224,159 +215,11 @@ exports.handler = async function (event, context) {
     const status = jobItem.status?.S || "normal";
     
     console.log(`Processing job ${jobId} with status: ${status}`);
-      
-    // Handle rate-limited jobs
-    if (status === "rate_limited") {
-      const rateLimitReset = parseInt(jobItem.rate_limit_reset.N);
-      console.log(`Rate limit reset time: ${rateLimitReset}, Current time: ${currentTime}, Difference: ${currentTime - rateLimitReset} seconds`);
-      
-      // Rate limit has passed, fetch tweets now
-      console.log(`Rate limit expired for job ${jobId}. Fetching tweets now...`);
-      
-      const twitter_token = jobItem.token.S;
-      const user_id = jobItem.user_id.S;
-      
-      try {
-        const twitterClient = new TwitterApi(twitter_token);
-        let tweets = [];
-        let pagination_token = null;
-        let totalFetched = 0;
-
-        // Fetch all user tweets
-        do {
-          const fetchParams = {
-            max_results: 100,
-            'tweet.fields': ['id', 'created_at', 'text'],
-            'user.fields': ['id', 'username']
-          };
-          
-          if (pagination_token) {
-            fetchParams.pagination_token = pagination_token;
-          }
-
-          console.log(`Fetching batch for rate-limited job, total so far: ${totalFetched}`);
-          const userTweets = await twitterClient.v2.userTimeline(user_id, fetchParams);
-          
-          if (userTweets.data) {
-            tweets = tweets.concat(userTweets.data);
-            totalFetched += userTweets.data.length;
-          }
-
-          pagination_token = userTweets.meta?.next_token;
-          
-          if (pagination_token) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-          
-          if (totalFetched >= 10000) break; // Safety limit
-          
-        } while (pagination_token);
-
-        console.log(`Fetched ${totalFetched} tweets for rate-limited job ${jobId}`);
-        
-        if (tweets.length === 0) {
-          // No tweets found, delete the job
-          const deleteParams = {
-            TableName: config.table_name,
-            Key: { jobId: { S: jobId } },
-          };
-          await dynamoDb.send(new DeleteItemCommand(deleteParams));
-          console.log(`No tweets found for job ${jobId}, deleted job`);
-          return;
-        }
-        
-        // Update job with tweet data and change status to normal
-        const tweet_ids = tweets.map(tweet => tweet.id);
-        const updateParams = {
-          TableName: config.table_name,
-          Key: { jobId: { S: jobId } },
-          UpdateExpression: "set tweet_no = :n, tweet_ids = :l, #status = :s REMOVE rate_limit_reset, user_id, queue_position",
-          ExpressionAttributeNames: {
-            "#status": "status"
-          },
-          ExpressionAttributeValues: {
-            ":n": { N: tweet_ids.length.toString() },
-            ":l": { L: tweet_ids.map(id => ({ S: id })) },
-            ":s": { S: "normal" }
-          },
-        };
-        await dynamoDb.send(new UpdateItemCommand(updateParams));
-        console.log(`Updated rate-limited job ${jobId} with ${tweet_ids.length} tweets`);
-        
-        // Don't process deletion in the same run, let next run handle it
-        return;
-        
-      } catch (fetchError) {
-        console.error(`Error fetching tweets for rate-limited job ${jobId}:`, fetchError);
-        
-        // Check if this is a monthly usage cap error
-        if (isMonthlyCapExceeded(fetchError)) {
-          console.log(`Monthly usage cap exceeded while fetching tweets for job ${jobId}`);
-          await suspendAllJobsForMonthlyCapReached();
-          return; // Stop all processing
-        } else if (fetchError.code === 429 && fetchError.rateLimit) {
-          // Still rate limited, update reset time with a buffer
-          const newReset = fetchError.rateLimit.reset + 60; // Add 1 minute buffer
-          console.log(`Still rate limited. New reset time: ${newReset}, Current: ${currentTime}`);
-          const updateParams = {
-            TableName: config.table_name,
-            Key: { jobId: { S: jobId } },
-            UpdateExpression: "set rate_limit_reset = :r",
-            ExpressionAttributeValues: {
-              ":r": { N: newReset.toString() }
-            },
-          };
-          await dynamoDb.send(new UpdateItemCommand(updateParams));
-          console.log(`Job ${jobId} still rate limited, updated reset time with buffer`);
-        } else if (fetchError.code === 401) {
-          // Unauthorized - try to refresh token
-          const refreshToken = jobItem.refresh_token?.S;
-          if (refreshToken) {
-            try {
-              console.log(`Token expired for job ${jobId}, attempting refresh...`);
-              const newTokens = await refreshTwitterToken(refreshToken);
-              
-              // Update job with new tokens
-              const updateParams = {
-                TableName: config.table_name,
-                Key: { jobId: { S: jobId } },
-                UpdateExpression: "set token = :t, refresh_token = :r",
-                ExpressionAttributeValues: {
-                  ":t": { S: newTokens.accessToken },
-                  ":r": { S: newTokens.refreshToken }
-                },
-              };
-              await dynamoDb.send(new UpdateItemCommand(updateParams));
-              console.log(`Refreshed tokens for job ${jobId}, will retry next run`);
-            } catch (refreshError) {
-              console.error(`Failed to refresh token for job ${jobId}:`, refreshError);
-              // Delete job if token refresh fails
-              const deleteParams = {
-                TableName: config.table_name,
-                Key: { jobId: { S: jobId } },
-              };
-              await dynamoDb.send(new DeleteItemCommand(deleteParams));
-              console.log(`Deleted job ${jobId} due to token refresh failure`);
-            }
-          } else {
-            console.error(`No refresh token available for job ${jobId}, deleting job`);
-            const deleteParams = {
-              TableName: config.table_name,
-              Key: { jobId: { S: jobId } },
-            };
-            await dynamoDb.send(new DeleteItemCommand(deleteParams));
-          }
-        } else {
-          // Other error, delete the job
-          console.error(`Fatal error fetching tweets for job ${jobId}, deleting job`);
-          const deleteParams = {
-            TableName: config.table_name,
-            Key: { jobId: { S: jobId } },
-          };
-          await dynamoDb.send(new DeleteItemCommand(deleteParams));
-        }
-        return;
-      }
+    
+    // Only process normal jobs since we no longer support API-based tweet retrieval
+    if (status !== "normal") {
+      console.log(`Skipping job ${jobId} with unsupported status: ${status}`);
+      return;
     }
     
     // Normal job processing
