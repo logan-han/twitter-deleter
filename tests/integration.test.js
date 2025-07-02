@@ -237,109 +237,25 @@ describe("Route Checks", () => {
     });
   });
 
-  describe("POST /delete-recent", () => {
-    it("should return 500 for invalid token", (done) => {
-      // Mock Twitter API to throw authentication error
-      mockTwitterClient.v2.userTimeline.mockRejectedValue({
-        code: 401,
-        data: { title: "Unauthorized", status: 401, detail: "Unauthorized" }
-      });
-      
+  describe("POST /delete-recent (removed)", () => {
+    it("should return 404 since route was removed", (done) => {
       request
         .post("/delete-recent")
         .type("form")
         .send({
-          token: "invalid_token",
+          token: "any_token",
           user_id: "123456789"
         })
         .end((err, res) => {
           if (err) done(err);
-          res.status.should.equal(500);
-          done();
-        });
-    });
-
-    it("should handle rate limiting", (done) => {
-      // Mock Twitter API to return rate limit error
-      const rateLimitError = {
-        code: 429,
-        rateLimit: {
-          reset: Math.floor(Date.now() / 1000) + 900, // 15 minutes from now
-          remaining: 0,
-          limit: 50
-        },
-        data: { title: "Too Many Requests", status: 429 }
-      };
-      
-      mockTwitterClient.v2.userTimeline.mockRejectedValue(rateLimitError);
-      mockDynamoDbClient.send.mockResolvedValue({ Items: [] });
-      
-      request
-        .post("/delete-recent")
-        .type("form")
-        .send({
-          token: "valid_token",
-          user_id: "123456789"
-        })
-        .end((err, res) => {
-          if (err) done(err);
-          res.status.should.equal(302); // Redirect to status page
-          done();
-        });
-    });
-
-    it("should successfully create job with tweets", (done) => {
-      // Mock Twitter API to return tweets
-      const mockTweets = [
-        { id: "1", created_at: "2023-01-01T00:00:00Z", text: "Tweet 1" },
-        { id: "2", created_at: "2023-01-02T00:00:00Z", text: "Tweet 2" }
-      ];
-      
-      mockTwitterClient.v2.userTimeline.mockResolvedValue({
-        data: mockTweets,
-        meta: { next_token: null }
-      });
-      
-      mockDynamoDbClient.send.mockResolvedValue({});
-      
-      request
-        .post("/delete-recent")
-        .type("form")
-        .send({
-          token: "valid_token",
-          user_id: "123456789"
-        })
-        .end((err, res) => {
-          if (err) done(err);
-          res.status.should.equal(302); // Redirect to status page
-          done();
-        });
-    });
-
-    it("should return 404 when no tweets found", (done) => {
-      // Mock Twitter API to return no tweets
-      mockTwitterClient.v2.userTimeline.mockResolvedValue({
-        data: null,
-        meta: { next_token: null }
-      });
-      
-      request
-        .post("/delete-recent")
-        .type("form")
-        .send({
-          token: "valid_token",
-          user_id: "123456789"
-        })
-        .end((err, res) => {
-          if (err) done(err);
-          res.status.should.equal(404);
+          res.status.should.equal(404); // Route no longer exists
           done();
         });
     });
   });
 
   describe("POST /upload", () => {
-    it("should return 404 without a file", (done) => {
+    it("should return 400 without a file", (done) => {
       request
         .post("/upload")
         .type("form")
@@ -348,12 +264,164 @@ describe("Route Checks", () => {
         })
         .end((err, res) => {
           if (err) done(err);
-          res.status.should.equal(404);
+          res.status.should.equal(400); // Changed from 404 to 400 for "No file uploaded"
+          done();
+        });
+    });
+
+    it("should return 400 for non-ZIP file", (done) => {
+      const fs = require('fs');
+      const path = require('path');
+      
+      // Create a temporary text file
+      const testFile = path.join(__dirname, 'temp_test.txt');
+      fs.writeFileSync(testFile, 'This is not a ZIP file');
+      
+      request
+        .post("/upload")
+        .attach('fileUploaded', testFile)
+        .field('token', 'test_token')
+        .field('refresh_token', 'test_refresh')
+        .end((err, res) => {
+          // Clean up
+          if (fs.existsSync(testFile)) {
+            fs.unlinkSync(testFile);
+          }
+          
+          if (err) done(err);
+          res.status.should.equal(400);
+          res.body.should.have.property('error');
+          res.body.error.should.match(/Only ZIP files are allowed/);
+          done();
+        });
+    });
+
+    it("should return 400 for ZIP without tweet data file", (done) => {
+      const fs = require('fs');
+      const path = require('path');
+      const AdmZip = require('adm-zip');
+      
+      // Create a ZIP file without tweet.js or tweets.js
+      const zip = new AdmZip();
+      zip.addFile('other_file.txt', Buffer.from('Not a tweet file', 'utf8'));
+      
+      const testFile = path.join(__dirname, 'temp_test.zip');
+      fs.writeFileSync(testFile, zip.toBuffer());
+      
+      request
+        .post("/upload")
+        .attach('fileUploaded', testFile)
+        .field('token', 'test_token')
+        .field('refresh_token', 'test_refresh')
+        .end((err, res) => {
+          // Clean up
+          if (fs.existsSync(testFile)) {
+            fs.unlinkSync(testFile);
+          }
+          
+          if (err) done(err);
+          res.status.should.equal(400);
+          res.body.should.have.property('error');
+          res.body.error.should.match(/Could not find tweet\.js or tweets\.js/);
+          done();
+        });
+    });
+
+    it("should successfully process valid tweets.js ZIP file", (done) => {
+      const fs = require('fs');
+      const path = require('path');
+      const AdmZip = require('adm-zip');
+      
+      // Create a valid tweets.js content
+      const tweetsContent = `window.YTD.tweets.part0 = [
+        {
+          "tweet": {
+            "id_str": "1234567890123456789",
+            "created_at": "Wed Dec 31 23:59:59 +0000 2021",
+            "full_text": "Test tweet content"
+          }
+        },
+        {
+          "tweet": {
+            "id_str": "9876543210987654321",
+            "created_at": "Thu Jan 01 00:00:01 +0000 2022",
+            "full_text": "Another test tweet"
+          }
+        }
+      ]`;
+      
+      // Create a ZIP file with tweets.js
+      const zip = new AdmZip();
+      zip.addFile('tweets.js', Buffer.from(tweetsContent, 'utf8'));
+      
+      const testFile = path.join(__dirname, 'temp_tweets.zip');
+      fs.writeFileSync(testFile, zip.toBuffer());
+      
+      // Mock DynamoDB to succeed
+      mockDynamoDbClient.send.mockResolvedValue({});
+      
+      request
+        .post("/upload")
+        .attach('fileUploaded', testFile)
+        .field('token', 'test_token')
+        .field('refresh_token', 'test_refresh')
+        .end((err, res) => {
+          // Clean up
+          if (fs.existsSync(testFile)) {
+            fs.unlinkSync(testFile);
+          }
+          
+          if (err) done(err);
+          res.status.should.equal(302); // Redirect to status page
+          res.header.location.should.match(/\/status\//);
+          done();
+        });
+    });
+
+    it("should successfully process valid tweet.js ZIP file (legacy format)", (done) => {
+      const fs = require('fs');
+      const path = require('path');
+      const AdmZip = require('adm-zip');
+      
+      // Create a valid tweet.js content (legacy format)
+      const tweetContent = `window.YTD.tweet.part0 = [
+        {
+          "tweet": {
+            "id_str": "1111111111111111111",
+            "created_at": "Wed Dec 31 23:59:59 +0000 2021",
+            "full_text": "Legacy format test"
+          }
+        }
+      ]`;
+      
+      // Create a ZIP file with tweet.js
+      const zip = new AdmZip();
+      zip.addFile('tweet.js', Buffer.from(tweetContent, 'utf8'));
+      
+      const testFile = path.join(__dirname, 'temp_tweet.zip');
+      fs.writeFileSync(testFile, zip.toBuffer());
+      
+      // Mock DynamoDB to succeed
+      mockDynamoDbClient.send.mockResolvedValue({});
+      
+      request
+        .post("/upload")
+        .attach('fileUploaded', testFile)
+        .field('token', 'test_token')
+        .field('refresh_token', 'test_refresh')
+        .end((err, res) => {
+          // Clean up
+          if (fs.existsSync(testFile)) {
+            fs.unlinkSync(testFile);
+          }
+          
+          if (err) done(err);
+          res.status.should.equal(302); // Redirect to status page
+          res.header.location.should.match(/\/status\//);
           done();
         });
     });
   });
-
 });
 
 /*
