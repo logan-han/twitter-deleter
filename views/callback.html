@@ -3,7 +3,7 @@
 <head>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css" integrity="sha384-HSMxcRTRxnN+Bdg0JdbxYKrThecOKuH5zCYotlSAcp1+c8xmyTe9GYg1l9a69psu" crossorigin="anonymous">
     <meta charset="UTF-8">
-    <title>Archive File Upload</title>
+    <title>Tweet Deleter - Upload tweet.js</title>
 </head>
 
 <body>
@@ -15,30 +15,40 @@
 </div>
 <% } %>
 
-<h3>Delete your tweets:</h3>
-<p><em>This will fetch and delete all your tweets. You'll be redirected to a status page to track progress.</em></p>
-<form class="form-inline" method="post" action="delete-recent">
-    <input type="hidden" name="token" value="<%= session.accessToken %>">
-    <input type="hidden" name="refresh_token" value="<%= session.refreshToken %>">
-    <input type="hidden" name="user_id" value="<%= session.twitterUserId %>">
-    <button type="submit" class="btn btn-primary">Delete ALL Tweets</button>
-</form>
+<h3>Delete your tweets using tweet data file:</h3>
+<p><em>Upload your tweet data file (zipped) to delete all your tweets listed in the file.</em></p>
 
-<H3>If you still see old tweets after above, please follow below steps:</H3>
+<H3>Follow these steps:</H3>
 <ol>
-    <li><a href="https://x.com/settings/download_your_data">Get your X (Twitter) archive zip</a></li>
-    <li>Unzip and find data\tweet.js then zip the file</li>
-    <li>Upload the ZIP file below and you'll be redirected to track deletion progress</li>
+    <li><a href="https://x.com/settings/download_your_data" target="_blank">Download your X (Twitter) archive</a></li>
+    <li>Extract the downloaded archive and navigate to the <code>data</code> folder</li>
+    <li>Find the tweet data file (usually <code>tweet.js</code> or <code>tweets.js</code> in <code>data/</code>)</li>
+    <li>Create a new ZIP file containing <strong>only</strong> the tweet data file</li>
+    <li>Upload that ZIP file below</li>
 </ol>
+
+<div class="alert alert-info">
+    <strong>Important:</strong> Do not upload the entire Twitter archive ZIP file. 
+    Please extract only the <code>tweet.js</code> or <code>tweets.js</code> file and create a new ZIP containing just that file.
+    The full archive can be hundreds of MB, but the tweet data file is typically just a few MB.
+</div>
+
 <form class="form-inline" method="post" action="upload" enctype="multipart/form-data">
     <div class="form-group">
-        <input type="file" name="fileUploaded">
-        <span class="help-block">Max 10MB & 20,000 tweets</span>
+        <label for="fileUploaded">Choose ZIP file containing tweet data:</label><br>
+        <input type="file" name="fileUploaded" id="fileUploaded" accept=".zip" required>
+        <span class="help-block">Upload ZIP file containing only tweet.js or tweets.js (max 10MB)</span>
         <input type="hidden" name="token" value="<%= session.accessToken %>">
         <input type="hidden" name="refresh_token" value="<%= session.refreshToken %>">
     </div>
-    <button type="submit" class="btn btn-default">Upload</button>
+    <br><br>
+    <button type="submit" class="btn btn-primary">Upload and Delete Tweets</button>
 </form>
+
+<div class="alert alert-warning" style="margin-top: 20px;">
+    <strong>Note:</strong> This tool only deletes tweets that are included in your tweet.js file. 
+    The Twitter archive may not include very recent tweets (from the last few days).
+</div>
 
 </body>
 </html>
