@@ -8,7 +8,21 @@ const { TwitterApi } = require("twitter-api-v2");
 const crypto = require("crypto");
 const fs = require("fs-extra");
 const multer = require("multer");
-const upload = multer({ dest: "/tmp/" });
+const upload = multer({ 
+  dest: "/tmp/",
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit (tweet.js files are typically much smaller)
+    files: 1
+  },
+  fileFilter: (req, file, cb) => {
+    // Only accept ZIP files
+    if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.toLowerCase().endsWith('.zip')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only ZIP files are allowed'), false);
+    }
+  }
+});
 const AdmZip = require("adm-zip");
 const async = require("async");
 const parser = {
@@ -159,217 +173,6 @@ app.route("/auth").get(async function (req, res, next) {
   }
 });
 
-app.route("/delete-recent").post(async function (req, res, next) {
-  try {
-    const twitterClient = new TwitterApi(req.body.token);
-    let tweets = [];
-    let pagination_token = null;
-    let count = 0;
-    let totalFetched = 0;
-
-    console.log("Starting to fetch all user tweets...");
-
-    // Use X API v2 to get user's tweets with pagination
-    do {
-      const params = {
-        max_results: 100, // Maximum allowed by API
-        'tweet.fields': ['id', 'created_at', 'text'],
-        'user.fields': ['id', 'username']
-      };
-      
-      if (pagination_token) {
-        params.pagination_token = pagination_token;
-      }
-
-      console.log(`Fetching batch ${Math.floor(totalFetched / 100) + 1}, total so far: ${totalFetched}`);
-
-      const userTweets = await twitterClient.v2.userTimeline(req.body.user_id, params);
-      
-      if (userTweets.data) {
-        tweets = tweets.concat(userTweets.data);
-        count += userTweets.data.length;
-        totalFetched += userTweets.data.length;
-        
-        console.log(`Fetched ${userTweets.data.length} tweets in this batch`);
-      }
-
-      pagination_token = userTweets.meta?.next_token;
-      
-      // Add delay to respect rate limits (Twitter API v2 has stricter limits)
-      if (pagination_token) {
-        console.log("Waiting to respect rate limits...");
-        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
-      }
-      
-      // Safety check to prevent infinite loops (but allow more than 3200)
-      if (totalFetched >= 10000) {
-        console.log("Reached safety limit of 10,000 tweets");
-        break;
-      }
-      
-    } while (pagination_token);
-
-    console.log(`Total tweets fetched: ${totalFetched}`);
-
-    if (tweets.length === 0) {
-      return res.status(404).json({ error: "No tweets found to delete" });
-    }
-
-    let id_list = tweets.map(tweet => tweet.id);
-    let jobId = Math.random().toString(36).substring(7);
-
-    console.log(`Creating deletion job for ${id_list.length} tweets`);
-
-    // Save job details in DynamoDB
-    const params = {
-      TableName: config.table_name,
-      Item: {
-        jobId: { S: jobId },
-        token: { S: req.body.token },
-        refresh_token: { S: req.body.refresh_token || '' },
-        tweet_no: { N: count.toString() },
-        tweet_ids: { L: id_list.map(id => ({ S: id })) },
-      },
-    };
-
-    await dynamoDb.send(new PutItemCommand(params));
-    res.redirect(`/status/${jobId}`);
-    
-  } catch (error) {
-    console.error("Error in delete-recent:", error);
-    console.error("Error details:", error.data || error.message);
-    
-    // Check if this is a monthly usage cap error
-    if (error.code === 429 && error.data && error.data.title === "UsageCapExceeded" && error.data.period === "Monthly") {
-      console.log("Monthly usage cap exceeded during initial tweet fetch");
-      
-      // Calculate when next month starts
-      const now = new Date();
-      const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
-      const nextMonthTimestamp = Math.floor(nextMonth.getTime() / 1000);
-      
-      // Create a suspended job 
-      let jobId = Math.random().toString(36).substring(7);
-      const params = {
-        TableName: config.table_name,
-        Item: {
-          jobId: { S: jobId },
-          token: { S: req.body.token },
-          refresh_token: { S: req.body.refresh_token || '' },
-          user_id: { S: req.body.user_id },
-          status: { S: "monthly_cap_suspended" },
-          monthly_cap_reset: { N: nextMonthTimestamp.toString() },
-          tweet_no: { N: "0" },
-          tweet_ids: { L: [] },
-          created_at: { N: Math.floor(Date.now() / 1000).toString() }
-        },
-      };
-      
-      try {
-        await dynamoDb.send(new PutItemCommand(params));
-        res.redirect(`/status/${jobId}`);
-      } catch (dbError) {
-        console.error("Error saving monthly cap suspended job:", dbError);
-        res.status(500).json({ error: "Could not save job for retry after monthly cap reset" });
-      }
-    } else if (error.code === 429 && error.rateLimit) {
-      console.log("Rate limited. Reset time:", error.rateLimit.reset);
-      
-      // Check how many jobs are already in the queue and calculate proper position
-      const queueCheckParams = {
-        TableName: config.table_name,
-      };
-      
-      let queuePosition = 0;
-      let earliestResetTime = 0;
-      const currentTime = Math.floor(Date.now() / 1000);
-      const newJobResetTime = error.rateLimit.reset;
-      
-      try {
-        const queueResult = await dynamoDb.send(new ScanCommand(queueCheckParams));
-        
-        if (queueResult.Items && queueResult.Items.length > 0) {
-          // Filter out session data - only count actual jobs
-          const actualJobs = queueResult.Items.filter(item => {
-            const jobId = item.jobId?.S || '';
-            const status = item.status?.S || 'normal';
-            // Don't count monthly suspended jobs in the queue
-            return !jobId.startsWith('session_') && status !== 'monthly_cap_suspended';
-          });
-          
-          // Simple queue position: count jobs created before this one
-          queuePosition = actualJobs.length;
-        }
-        
-        console.log(`Jobs in queue: ${queuePosition}, new job will be position: ${queuePosition + 1}`);
-      } catch (queueError) {
-        console.error("Error checking queue:", queueError);
-        // Continue with default estimation
-      }
-      
-      // Create a job that will be retried after rate limit resets
-      let jobId = Math.random().toString(36).substring(7);
-      const resetTime = error.rateLimit.reset;
-      
-      // Calculate estimated start time based on proper queue analysis
-      // Assume each job takes ~5 minutes to process on average
-      const avgJobTimeMinutes = 5;
-      const rateLimitWaitMinutes = Math.ceil((resetTime - currentTime) / 60);
-      
-      // Calculate queue wait: jobs ahead * avg time per job
-      const queueWaitMinutes = queuePosition * avgJobTimeMinutes;
-      
-      // Total wait is the maximum of rate limit wait and queue processing time
-      const totalWaitMinutes = Math.max(rateLimitWaitMinutes, queueWaitMinutes);
-      
-      console.log(`Rate limit wait: ${rateLimitWaitMinutes}min, Queue wait: ${queueWaitMinutes}min, Total: ${totalWaitMinutes}min`);
-      
-      // Save job with rate limit info
-      const params = {
-        TableName: config.table_name,
-        Item: {
-          jobId: { S: jobId },
-          token: { S: req.body.token },
-          refresh_token: { S: req.body.refresh_token || '' },
-          user_id: { S: req.body.user_id },
-          status: { S: "rate_limited" },
-          rate_limit_reset: { N: resetTime.toString() },
-          tweet_no: { N: "0" }, // Will be populated when actually fetched
-          tweet_ids: { L: [] }, // Will be populated when actually fetched
-          created_at: { N: currentTime.toString() }
-        },
-      };
-      
-      try {
-        await dynamoDb.send(new PutItemCommand(params));
-        
-        let message;
-        if (queuePosition === 0) {
-          message = `Rate limited by Twitter. Your job will start automatically in ~${rateLimitWaitMinutes} minutes when the rate limit resets.`;
-        } else {
-          const queueWaitHours = Math.floor(queueWaitMinutes / 60);
-          const queueWaitMins = queueWaitMinutes % 60;
-          let queueTimeStr = "";
-          if (queueWaitHours > 0) {
-            queueTimeStr = `${queueWaitHours}h ${queueWaitMins}m`;
-          } else {
-            queueTimeStr = `${queueWaitMins}m`;
-          }
-          
-          message = `Rate limited by Twitter. You are #${queuePosition + 1} in the queue behind ${queuePosition} other user${queuePosition === 1 ? '' : 's'}. Your job will start in approximately ${queueTimeStr}.`;
-        }
-        
-        res.redirect(`/status/${jobId}`);
-      } catch (dbError) {
-        console.error("Error saving rate-limited job:", dbError);
-        res.status(500).json({ error: "Could not save job for retry" });
-      }
-    } else {
-      res.status(500).json({ error: "Could not fetch tweets or create job", details: error.message });
-    }
-  }
-});
-
 const callbackLimiter = RateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // max 100 requests per windowMs
@@ -483,47 +286,161 @@ app.route("/callback").get(callbackLimiter, async function (req, res, next) {
 
 app
   .route("/upload")
-  .post(upload.single("fileUploaded"), async function (req, res, next) {
-    if (req.file) {
-      let zip = new AdmZip(req.file.path);
-      let zipEntries = zip.getEntries();
-      zipEntries.forEach(async function (zipEntry) {
-        if (zipEntry.entryName == "tweet.js") {
-          let tweet_archive = zipEntry.getData().toString("utf8").split("\n");
-          tweet_archive[0] = "[{";
-          tweet_archive = tweet_archive.join("\n");
-          tweet_archive = JSON.parse(tweet_archive);
-          let id_list = [];
-          for (var i = 0; i < tweet_archive.length; i++) {
-            let id = tweet_archive[i].tweet.id_str;
-            id_list.push(id);
-          }
-          const params = {
-            TableName: config.table_name,
-            Item: {
-              jobId: { S: req.file.filename },
-              token: { S: req.body.token },
-              refresh_token: { S: req.body.refresh_token || '' },
-              tweet_no: { N: tweet_archive.length.toString() },
-              tweet_ids: { L: id_list.map(id => ({ S: id })) },
-            },
-          };
+  .post((req, res, next) => {
+    // Handle multer errors
+    upload.single("fileUploaded")(req, res, (err) => {
+      if (err) {
+        console.error("Multer error:", err);
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ error: "File too large. Maximum size is 10MB. Please zip only the tweet.js file." });
+        } else if (err.message === 'Only ZIP files are allowed') {
+          return res.status(400).json({ error: "Only ZIP files are allowed. Please upload a ZIP file containing your tweet data file (tweet.js or tweets.js)." });
+        } else {
+          return res.status(400).json({ error: "File upload error: " + err.message });
+        }
+      }
+      next();
+    });
+  }, async function (req, res, next) {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    console.log(`Processing uploaded file: ${req.file.filename}, size: ${req.file.size} bytes`);
+
+    try {
+      // Validate file size - tweet.js should be much smaller than full archive
+      const maxFileSize = 10 * 1024 * 1024; // 10MB
+      if (req.file.size > maxFileSize) {
+        return res.status(400).json({ error: "File too large. Maximum size is 10MB. Please zip only the tweet.js file." });
+      }
+
+      const zip = new AdmZip(req.file.path);
+      const zipEntries = zip.getEntries();
+      
+      console.log(`ZIP contains ${zipEntries.length} entries`);
+      
+      let tweetJsFound = false;
+      let tweet_archive = null;
+
+      // Process zip entries synchronously to avoid timeout issues
+      for (const zipEntry of zipEntries) {
+        console.log(`Processing entry: ${zipEntry.entryName}`);
+        
+        // Check for both tweet.js and tweets.js (Twitter uses both naming conventions)
+        if (zipEntry.entryName === "tweet.js" || zipEntry.entryName.endsWith("/tweet.js") ||
+            zipEntry.entryName === "tweets.js" || zipEntry.entryName.endsWith("/tweets.js")) {
+          console.log(`Found tweet data file: ${zipEntry.entryName}`);
+          tweetJsFound = true;
+          
           try {
-            await dynamoDb.send(new PutItemCommand(params));
-            res.redirect(`/status/${req.file.filename}`);
-            const normalizedPath = path.resolve(req.file.path);
-            if (normalizedPath.startsWith("/tmp/") && fs.existsSync(normalizedPath)) {
-              fs.unlinkSync(normalizedPath);
+            let tweet_data = zipEntry.getData().toString("utf8");
+            
+            // Handle both JavaScript formats:
+            // - window.YTD.tweet.part0 = [...] (older format)
+            // - window.YTD.tweets.part0 = [...] (newer format)
+            if (tweet_data.includes("window.YTD.tweet.part0") || tweet_data.includes("window.YTD.tweets.part0")) {
+              console.log("Detected window.YTD format");
+              // Extract JSON array from JavaScript assignment
+              const jsonStart = tweet_data.indexOf('[');
+              const jsonEnd = tweet_data.lastIndexOf(']');
+              if (jsonStart !== -1 && jsonEnd !== -1) {
+                tweet_data = tweet_data.substring(jsonStart, jsonEnd + 1);
+              }
+            } else {
+              // Handle line-by-line format (legacy parsing)
+              let lines = tweet_data.split("\n");
+              if (lines.length > 0 && lines[0].trim() !== "[") {
+                lines[0] = "[{";
+                tweet_data = lines.join("\n");
+              }
             }
-          } catch (error) {
-            res.status(500).json({ error: "Could not create the job" });
+            
+            tweet_archive = JSON.parse(tweet_data);
+            console.log(`Parsed ${tweet_archive.length} tweets from archive`);
+            break;
+            
+          } catch (parseError) {
+            console.error("Error parsing tweet data file:", parseError);
+            return res.status(400).json({ 
+              error: "Invalid tweet data format. Please ensure you extracted the correct tweet file (tweet.js or tweets.js) from your Twitter archive and zipped it correctly." 
+            });
           }
         }
+      }
+
+      if (!tweetJsFound) {
+        return res.status(400).json({ 
+          error: "Could not find tweet.js or tweets.js in the uploaded ZIP file. Please extract the tweet data file from your Twitter archive and zip only that file." 
+        });
+      }
+
+      if (!tweet_archive || tweet_archive.length === 0) {
+        return res.status(400).json({ 
+          error: "No tweets found in the tweet data file." 
+        });
+      }
+
+      // Extract tweet IDs
+      const id_list = [];
+      for (const item of tweet_archive) {
+        if (item.tweet && item.tweet.id_str) {
+          id_list.push(item.tweet.id_str);
+        }
+      }
+
+      if (id_list.length === 0) {
+        return res.status(400).json({ 
+          error: "No valid tweet IDs found in the archive." 
+        });
+      }
+
+      console.log(`Extracted ${id_list.length} tweet IDs`);
+
+      // Create job in DynamoDB
+      const jobId = Math.random().toString(36).substring(7);
+      const params = {
+        TableName: config.table_name,
+        Item: {
+          jobId: { S: jobId },
+          token: { S: req.body.token },
+          refresh_token: { S: req.body.refresh_token || '' },
+          tweet_no: { N: id_list.length.toString() },
+          tweet_ids: { L: id_list.map(id => ({ S: id })) },
+          created_at: { N: Math.floor(Date.now() / 1000).toString() },
+          status: { S: "normal" }
+        },
+      };
+
+      await dynamoDb.send(new PutItemCommand(params));
+      console.log(`Created job ${jobId} for ${id_list.length} tweets`);
+
+      // Clean up uploaded file
+      const normalizedPath = path.resolve(req.file.path);
+      if (normalizedPath.startsWith("/tmp/") && fs.existsSync(normalizedPath)) {
+        fs.unlinkSync(normalizedPath);
+        console.log("Cleaned up uploaded file");
+      }
+
+      res.redirect(`/status/${jobId}`);
+
+    } catch (error) {
+      console.error("Error processing upload:", error);
+      
+      // Clean up file on error
+      try {
+        const normalizedPath = path.resolve(req.file.path);
+        if (normalizedPath.startsWith("/tmp/") && fs.existsSync(normalizedPath)) {
+          fs.unlinkSync(normalizedPath);
+        }
+      } catch (cleanupError) {
+        console.error("Error cleaning up file:", cleanupError);
+      }
+      
+      res.status(500).json({ 
+        error: "Could not process the uploaded file", 
+        details: error.message 
       });
-    } else {
-      res
-        .status(404)
-        .json({ error: "Could not find tweet.js from the uploaded file" });
     }
   });
 
